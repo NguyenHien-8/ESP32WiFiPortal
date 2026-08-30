@@ -14,8 +14,13 @@ void setup() {
     Serial.println(wifiPortal.lastError());
     return;
   }
+  
+// Open your web browser and type http://192.168.4.1
+  Serial.println("WiFi connected!");
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
 
-  Serial.print("Connected. IP: ");
+  Serial.print("IP: ");
   Serial.println(WiFi.localIP());
 }
 
