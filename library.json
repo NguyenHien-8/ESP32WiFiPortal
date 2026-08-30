@@ -1,6 +1,6 @@
 {
   "name": "ESP32WiFiPortal",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "description": "ESP32 Wi-Fi captive portal and credential manager.",
   "keywords": ["esp32", "wifi", "captive-portal", "provisioning", "nvs"],
   "repository": {

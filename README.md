@@ -1,30 +1,16 @@
 # ESP32WiFiPortal
 
-ESP32-only, English-only Wi-Fi provisioning library for Arduino-ESP32.
-
-This project is a focused derivative/reimplementation inspired by the captive-portal workflow of **tzapu/WiFiManager 2.0.17**. It is intended as a smaller codebase that can be developed independently for ESP32 projects.
+ESP32-only, Wi-Fi provisioning library for Arduino-ESP32.
 
 ## Features
 
 - ESP32 only
-- English-only captive portal
 - AP mode + DNS captive redirect
 - Wi-Fi network scanning
 - SSID/password storage in ESP32 Preferences/NVS
 - Blocking and non-blocking portal modes
 - On-demand configuration support
 - No third-party runtime dependencies
-
-## Requirements
-
-- ESP32 Arduino Core by Espressif Systems
-- Arduino IDE or PlatformIO
-
-The library uses only components shipped with Arduino-ESP32: `WiFi`, `WebServer`, `DNSServer`, and `Preferences`.
-
-## Install from a GitHub repository
-
-Place this repository in your Arduino libraries directory, or add it to a PlatformIO project as a Git dependency after replacing the placeholder repository URL.
 
 ## Minimal example
 
@@ -81,7 +67,6 @@ bool eraseCredentials(bool disconnect = true);
 - Use an AP password of at least 8 characters in production.
 - Wi-Fi credentials are stored in ESP32 NVS. They are not application-level encrypted by this library.
 - The captive portal is HTTP on the local setup AP. Do not expose it to an untrusted network.
-- Avoid logging Wi-Fi passwords.
 
 ## Repository layout
 
@@ -101,13 +86,8 @@ ESP32WiFiPortal/
 ├── library.json
 ├── keywords.txt
 ├── LICENSE
-├── NOTICE
 └── README.md
 ```
-
-## Attribution
-
-This repository was designed from the behavior and source study of tzapu/WiFiManager 2.0.17, distributed under the MIT License. See `NOTICE` and `LICENSE`.
 
 ## License
 
