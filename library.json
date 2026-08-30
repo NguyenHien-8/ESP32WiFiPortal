@@ -1,0 +1,14 @@
+{
+  "name": "ESP32WiFiPortal",
+  "version": "0.1.0",
+  "description": "ESP32 Wi-Fi captive portal and credential manager.",
+  "keywords": ["esp32", "wifi", "captive-portal", "provisioning", "nvs"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NguyenHien-8/ESP32WiFiPortal.git"
+  },
+  "license": "Apache License V2.0",
+  "frameworks": ["arduino"],
+  "platforms": ["espressif32"],
+  "headers": "ESP32WiFiPortal.h"
+}

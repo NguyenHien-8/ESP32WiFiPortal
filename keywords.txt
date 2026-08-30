@@ -1,0 +1,7 @@
+ESP32WiFiPortal	KEYWORD1
+autoConnect	KEYWORD2
+connectSaved	KEYWORD2
+startConfigPortal	KEYWORD2
+startConfigPortalAsync	KEYWORD2
+process	KEYWORD2
+eraseCredentials	KEYWORD2
