@@ -3,13 +3,22 @@ name: Arduino Library Lint
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   lint:
+    name: Arduino Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: arduino/arduino-lint-action@v2
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Run Arduino Lint
+        uses: arduino/arduino-lint-action@v3
         with:
-          library-manager: update
           compliance: specification
+          library-manager: false
+          project-type: all
