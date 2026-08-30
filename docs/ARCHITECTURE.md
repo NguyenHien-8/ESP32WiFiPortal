@@ -7,11 +7,13 @@
 1. `connectSaved()` reads SSID/password from the Preferences/NVS namespace `ewp_wifi`.
 2. The ESP32 attempts STA connection.
 3. On demand, `startConfigPortal()` or `startConfigPortalAsync()` switches to `WIFI_AP_STA`.
-4. `DNSServer` resolves all hostnames to the ESP32 SoftAP address.
-5. `WebServer` serves the captive portal and captive-probe redirects.
-6. `/scan` returns nearby Wi-Fi networks as JSON.
-7. `/save` validates and stores credentials in NVS.
-8. The portal shuts down and the ESP32 attempts the selected STA connection.
+4. The SoftAP uses `200.5.29.8` so the portal remains directly accessible when
+   a configured hostname cannot be resolved.
+5. `DNSServer` resolves all hostnames to the ESP32 SoftAP address.
+6. `WebServer` serves the captive portal and captive-probe redirects.
+7. `/scan` returns nearby Wi-Fi networks as JSON.
+8. `/save` validates and stores credentials in NVS.
+9. The portal shuts down and the ESP32 attempts the selected STA connection.
 
 ## Core dependencies
 

@@ -64,7 +64,8 @@ public:
   String savedSSID();
   bool eraseCredentials(bool disconnect = true);
 
-  // Optional tuning.
+  // Optional tuning. During setup, use http://200.5.29.8 if the hostname
+  // cannot be resolved by the client device.
   void setHostname(const char* hostname);
   void setConnectTimeout(uint32_t timeoutMs);
   void setAPChannel(uint8_t channel);
@@ -109,11 +110,8 @@ private:
 
   State _state = State::Idle;
   bool _portalActive = false;
-  bool _blockingPortal = false;
   bool _connectPending = false;
   bool _connectAttemptActive = false;
-  bool _routesConfigured = false;
-
   uint32_t _connectTimeoutMs = 15000;
   uint32_t _portalTimeoutMs = 0;
   uint32_t _portalStartedAt = 0;

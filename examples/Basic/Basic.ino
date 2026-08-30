@@ -7,6 +7,9 @@ void setup() {
   delay(200);
 
   wifiPortal.setHostname("esp32-device");
+  wifiPortal.onPortalStarted([]() {
+    Serial.println("Setup fallback: http://200.5.29.8");
+  });
 
   // Try saved credentials. If they fail, open the captive portal.
   if (!wifiPortal.autoConnect("ESP32-Setup", "12345678", 15000, 0)) {
@@ -14,8 +17,6 @@ void setup() {
     Serial.println(wifiPortal.lastError());
     return;
   }
-  
-// Open your web browser and type http://192.168.4.1
   Serial.println("WiFi connected!");
   Serial.print("SSID: ");
   Serial.println(WiFi.SSID());

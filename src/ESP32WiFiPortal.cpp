@@ -1,7 +1,16 @@
 #include "ESP32WiFiPortal.h"
 #include "PortalPage.h"
 
-#include <esp_wifi.h>
+namespace {
+const IPAddress kDefaultPortalIP(200, 5, 29, 8);
+const IPAddress kDefaultPortalSubnet(255, 255, 255, 0);
+}  // namespace
+
+constexpr uint16_t ESP32WiFiPortal::kDnsPort;
+constexpr uint16_t ESP32WiFiPortal::kHttpPort;
+constexpr const char* ESP32WiFiPortal::kPrefsNamespace;
+constexpr const char* ESP32WiFiPortal::kPrefsSSID;
+constexpr const char* ESP32WiFiPortal::kPrefsPassword;
 
 ESP32WiFiPortal::ESP32WiFiPortal() = default;
 
@@ -33,9 +42,7 @@ bool ESP32WiFiPortal::autoConnect(const char* apSSID,
 bool ESP32WiFiPortal::startConfigPortal(const char* apSSID,
                                         const char* apPassword,
                                         uint32_t portalTimeoutMs) {
-  _blockingPortal = true;
   if (!openPortal(apSSID, apPassword, portalTimeoutMs)) {
-    _blockingPortal = false;
     return false;
   }
 
@@ -45,14 +52,12 @@ bool ESP32WiFiPortal::startConfigPortal(const char* apSSID,
     yield();
   }
 
-  _blockingPortal = false;
   return WiFi.status() == WL_CONNECTED;
 }
 
 bool ESP32WiFiPortal::startConfigPortalAsync(const char* apSSID,
                                              const char* apPassword,
                                              uint32_t portalTimeoutMs) {
-  _blockingPortal = false;
   return openPortal(apSSID, apPassword, portalTimeoutMs);
 }
 
@@ -77,8 +82,16 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   _connectAttemptActive = false;
 
   WiFi.mode(WIFI_AP_STA);
-  if (!_hostname.length() == 0) {
+  if (!WiFi.softAPConfig(kDefaultPortalIP, kDefaultPortalIP, kDefaultPortalSubnet)) {
+    WiFi.softAPdisconnect(true);
+    setError("Failed to configure captive portal IP");
+    _state = State::Failed;
+    return false;
+  }
+
+  if (_hostname.length() > 0) {
     WiFi.setHostname(_hostname.c_str());
+    WiFi.softAPsetHostname(_hostname.c_str());
   }
 
   bool apOk = false;
@@ -89,11 +102,13 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   }
 
   if (!apOk) {
+    WiFi.softAPdisconnect(true);
     setError("Failed to start ESP32 access point");
     _state = State::Failed;
     return false;
   }
 
+  _portalActive = true;
   _server.reset(new WebServer(kHttpPort));
   configureRoutes();
   _server->begin();
@@ -106,7 +121,6 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
     return false;
   }
 
-  _portalActive = true;
   _state = State::Portal;
   invoke(_onPortalStarted);
   return true;
@@ -131,7 +145,6 @@ void ESP32WiFiPortal::configureRoutes() {
   _server->on("/fwlink", HTTP_ANY, [this]() { handleCaptiveProbe(); });
 
   _server->onNotFound([this]() { handleNotFound(); });
-  _routesConfigured = true;
 }
 
 void ESP32WiFiPortal::handleRoot() {
@@ -294,8 +307,9 @@ void ESP32WiFiPortal::beginPendingConnection() {
 
   // Keep AP + captive portal alive while testing the STA credentials.
   WiFi.mode(WIFI_AP_STA);
-  if (!_hostname.length() == 0) {
+  if (_hostname.length() > 0) {
     WiFi.setHostname(_hostname.c_str());
+    WiFi.softAPsetHostname(_hostname.c_str());
   }
   WiFi.disconnect(false, false);
   delay(20);
@@ -314,7 +328,7 @@ bool ESP32WiFiPortal::connect(const String& ssid,
   _state = State::Connecting;
   _lastError = "";
   WiFi.mode(WIFI_STA);
-  if (!_hostname.length() == 0) {
+  if (_hostname.length() > 0) {
     WiFi.setHostname(_hostname.c_str());
   }
   WiFi.disconnect(false, false);
@@ -324,6 +338,7 @@ bool ESP32WiFiPortal::connect(const String& ssid,
   const uint32_t started = millis();
   while (WiFi.status() != WL_CONNECTED) {
     if (timeoutMs > 0 && millis() - started >= timeoutMs) {
+      WiFi.disconnect(false, false);
       setError("Wi-Fi connection timed out");
       _state = State::Failed;
       return false;
@@ -349,9 +364,10 @@ void ESP32WiFiPortal::stopConfigPortal() {
   }
 
   _portalActive = false;
-  _routesConfigured = false;
   _connectPending = false;
   _connectAttemptActive = false;
+  _pendingSSID = "";
+  _pendingPassword = "";
   if (_state == State::Portal) _state = State::Idle;
 }
 
@@ -362,9 +378,10 @@ bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password
     return false;
   }
   const size_t ssidWritten = prefs.putString(kPrefsSSID, ssid);
-  prefs.putString(kPrefsPassword, password);
+  const size_t passwordWritten = prefs.putString(kPrefsPassword, password);
   prefs.end();
-  return ssidWritten > 0;
+  return ssidWritten == ssid.length() &&
+         (password.length() == 0 || passwordWritten == password.length());
 }
 
 bool ESP32WiFiPortal::loadCredentials(String& ssid, String& password) {
@@ -373,7 +390,7 @@ bool ESP32WiFiPortal::loadCredentials(String& ssid, String& password) {
   ssid = prefs.getString(kPrefsSSID, "");
   password = prefs.getString(kPrefsPassword, "");
   prefs.end();
-  return !ssid.length() == 0;
+  return ssid.length() > 0;
 }
 
 bool ESP32WiFiPortal::hasSavedCredentials() {

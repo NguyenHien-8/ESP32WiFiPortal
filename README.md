@@ -6,6 +6,7 @@ ESP32-only, Wi-Fi provisioning library for Arduino-ESP32.
 
 - ESP32 only
 - AP mode + DNS captive redirect
+- Fixed setup fallback address: `http://200.5.29.8`
 - Wi-Fi network scanning
 - SSID/password storage in ESP32 Preferences/NVS
 - Blocking and non-blocking portal modes
@@ -32,6 +33,10 @@ void setup() {
 
 void loop() {}
 ```
+
+When the setup AP is active, the captive portal uses `200.5.29.8`. If a name
+configured with `setHostname()` is not resolved by the phone or computer, open
+`http://200.5.29.8` directly while still connected to the setup AP.
 
 ## Recommended production flow
 
