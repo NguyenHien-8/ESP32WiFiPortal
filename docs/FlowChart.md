@@ -74,6 +74,28 @@ Portal IP được giữ cố định trong suốt phiên đang chạy. `setPort
 `false` nếu được gọi khi Portal còn active, nhờ đó SoftAP, DNS và HTTP redirect
 luôn dùng cùng một địa chỉ.
 
+## Wi-Fi scan non-blocking trong Portal
+
+```mermaid
+flowchart TD
+    A[GET /scan] --> B{Scan state}
+    B -- Idle --> C[Start scan async]
+    C --> D[HTTP 202 scanning]
+    B -- Scanning --> E{scanComplete}
+    E -- Running --> D
+    E -- Ready --> F[State = Ready]
+    E -- Failed hoặc timeout --> G[HTTP 503 và cleanup]
+    D --> H[Browser chờ 400 ms rồi poll lại]
+    H --> A
+    B -- Ready --> I[Build JSON từ kết quả]
+    F --> I
+    I --> J[scanDelete, HTTP 200]
+```
+
+Scan driver chạy asynchronous nên mỗi lần `process()` chỉ poll trạng thái rồi
+tiếp tục phục vụ DNS, HTTP và state machine. Portal stop hoặc một yêu cầu kết nối
+hợp lệ sẽ hủy scan đang chạy và giải phóng kết quả; không có hai scan đồng thời.
+
 ## Nhận và thử credential mới
 
 ```mermaid
@@ -84,8 +106,11 @@ flowchart TD
     D -- Có --> E[HTTP 409]
     D -- Không --> F[Giữ credential mới tạm thời trong RAM]
     F --> G[Trả trang Connecting]
-    G --> H[process gọi WiFi.begin sau khoảng trễ ngắn]
-    H --> I{STA đã connected?}
+    G --> H[Phase Disconnect STA nếu cần]
+    H --> U[Phase Settling bằng millis]
+    U --> V[Phase apply STA config]
+    V --> W[Phase WiFi.begin]
+    W --> I{STA đã connected?}
     I -- Chưa --> J{Đã quá connect timeout?}
     J -- Chưa --> I
     J -- Có --> K{Credential mới bị từ chối rõ ràng?}
@@ -122,7 +147,8 @@ flowchart TD
     I --> J{Disconnect khi hoạt động bình thường?}
     J -- Không --> K[Để owner hiện tại xử lý attempt]
     J -- Có --> N[Đặt lịch Reconnect sau retry interval]
-    N --> O[Thử hữu hạn với exponential backoff]
+    N --> S[Disconnect nếu cần, Settling, Config, WiFi.begin]
+    S --> O[Thử hữu hạn với exponential backoff]
     O --> P{Kết nối được?}
     P -- Có --> Q[State = Connected, reset retry]
     P -- Không --> R[Cooldown bằng max retry interval]

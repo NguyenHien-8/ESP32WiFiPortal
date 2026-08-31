@@ -12,7 +12,9 @@
 5. The SoftAP receives the configured address, or `192.168.4.1/24` by default.
 6. `DNSServer` resolves all hostnames to the ESP32 SoftAP address.
 7. `WebServer` serves the captive portal and captive-probe redirects.
-8. `/scan` returns nearby Wi-Fi networks as JSON.
+8. `/scan` starts an asynchronous Wi-Fi scan, returns HTTP `202` while it is
+   running, then returns the nearby networks as JSON when polling observes it
+   ready.
 9. `/save` validates credentials and keeps them temporarily in RAM.
 10. `process()` starts and monitors the candidate STA connection while the SoftAP
    remains available.
@@ -27,6 +29,7 @@ All dependencies are included with Espressif's Arduino-ESP32 core:
 - `WebServer.h`
 - `DNSServer.h`
 - `Preferences.h`
+- `esp_wifi.h` (only to stop an in-progress asynchronous scan during cleanup)
 
 No third-party runtime library is required.
 
@@ -46,6 +49,14 @@ two unicast DNS servers. It only updates the library configuration; the values
 are applied with `WiFi.config(...)` immediately before the next managed
 `WiFi.begin()`. `useSTADHCP()` selects a zero-address `WiFi.config(...)` call,
 which restarts the Arduino-ESP32 DHCP client without altering the SoftAP.
+
+For runtime Portal and Auto Reconnect attempts, setup is split into cooperative
+phases. One call disconnects STA when cleanup is needed, later calls observe the
+20 ms settle interval with unsigned `millis()` subtraction, and a ready call
+applies the STA configuration and invokes `WiFi.begin()`. A retry following
+`cancelSTAConnection()` reuses the already-clean STA state and does not issue a
+second redundant disconnect. Blocking startup APIs drive these same phases in
+their compatibility loops.
 
 ## Wi-Fi events and reconnect ownership
 
@@ -103,9 +114,11 @@ the cache only after a successful connection and NVS commit.
 Portal scan/status JSON shares one reserved response buffer while the Portal is
 active. Scan duplicate detection keeps compact SSID hashes and performs an exact
 SSID comparison on a hash match, avoiding the previous repeated `WiFi.SSID()`
-allocations for every earlier scan result. `WiFi.scanDelete()` still runs before
-the response is sent, and all scan-only capacity is released when the Portal
-stops.
+allocations for every earlier scan result. The driver scan itself is asynchronous;
+`process()` only polls its state, while the browser polls `/scan` after HTTP `202`.
+`WiFi.scanDelete()` still runs before the completed response is sent, and an
+active scan is stopped and cleaned if the Portal closes. All scan-only capacity
+is released when the Portal stops.
 
 ## Design boundaries
 

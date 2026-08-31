@@ -18,7 +18,7 @@ ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 - Lightweight `WiFi.onEvent()` tracking with disconnect reasons
 - Library-managed auto reconnect with bounded retry bursts and capped backoff
 - Automatic recovery of the last saved Wi-Fi after an unsuccessful Portal session
-- Wi-Fi scanning and Preferences/NVS credential storage
+- Asynchronous Wi-Fi scanning and Preferences/NVS credential storage
 - Blocking, non-blocking, and on-demand portal modes
 - Safe cancellation of pending STA attempts when the portal stops or times out
 - No third-party runtime dependency
@@ -135,6 +135,22 @@ start cancels that schedule before taking ownership of the STA interface.
 Short Serial logs are enabled by default for Portal, Connect, Got IP, Disconnect,
 Retry, and Reconnect transitions. Passwords are never logged. Use
 `setLogging(false)` when the application needs silent operation.
+
+## Cooperative runtime
+
+`process()` advances STA connection setup in short phases: disconnect, a
+`millis()`-based settle interval, IP configuration, and `WiFi.begin()`. Auto
+Reconnect timeouts, retry backoff, cooldown, and Portal scans also use state and
+timestamps; `/scan` returns HTTP `202` while the ESP32 scan runs and the existing
+Portal page polls until results are ready. DNS, HTTP, Wi-Fi events, and connection
+state therefore continue to be serviced between scan updates.
+
+Cooperative operation still depends on the application calling `process()`
+frequently. Prefer `startConfigPortalAsync()` for runtime configuration, schedule
+application work with `millis()`, and avoid long `delay()` calls or blocking
+HTTP/TLS operations in `loop()`. The existing `connectSaved()`, `autoConnect()`,
+and `startConfigPortal()` APIs intentionally retain their blocking behavior for
+source compatibility.
 
 ## Portal timeout and stop behavior
 

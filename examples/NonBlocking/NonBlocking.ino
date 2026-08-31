@@ -35,6 +35,8 @@ void setup() {
 
 void loop() {
   // Required for the async portal and library-managed Auto Reconnect.
+  // Keep this loop cooperative: schedule long-running application work with
+  // millis() and avoid long delay() or blocking network calls.
   wifiPortal.process();
 
   // Your application code can continue running here.

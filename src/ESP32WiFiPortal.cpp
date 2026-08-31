@@ -11,6 +11,7 @@
 #include "ESP32WiFiPortal.h"
 #include "PortalPage.h"
 
+#include <esp_wifi.h>
 #include <new>
 
 namespace {
@@ -188,7 +189,7 @@ bool ESP32WiFiPortal::connectSaved(uint32_t timeoutMs) {
     return false;
   }
 
-  const bool connected = connect(_savedSSID, _savedPassword, timeoutMs);
+  const bool connected = connect(timeoutMs);
   if (!connected) scheduleSavedConnectionRecovery();
   return connected;
 }
@@ -249,8 +250,7 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   _portalTimeoutMs = portalTimeoutMs;
   _portalStartedAt = millis();
   _connectPending = false;
-  _connectAttemptActive = false;
-  _connectionOwner = ConnectionOwner::None;
+  releaseSTAConnection();
   _portalRetriesUsed = 0;
 
   WiFi.mode(WIFI_AP_STA);
@@ -338,17 +338,82 @@ void ESP32WiFiPortal::handleRoot() {
   _server->send_P(200, "text/html; charset=utf-8", EWP_PORTAL_HTML);
 }
 
+void ESP32WiFiPortal::processScan() {
+  if (_scanState != ScanState::Scanning) return;
+
+  const int16_t result = WiFi.scanComplete();
+  if (result == WIFI_SCAN_RUNNING &&
+      millis() - _scanStartedAt < kScanTimeoutMs) {
+    return;
+  }
+
+  if (result >= 0) {
+    _scanResultCount = result;
+    _scanState = ScanState::Ready;
+    return;
+  }
+
+  // The Arduino core normally times out first. This explicit upper bound also
+  // prevents an unusual driver state from leaving the Portal stuck polling.
+  if (result == WIFI_SCAN_RUNNING) esp_wifi_scan_stop();
+  WiFi.scanDelete();
+  _scanResultCount = 0;
+  _scanState = ScanState::Failed;
+}
+
+void ESP32WiFiPortal::resetScan(bool cancelActiveScan) {
+  if (_scanState == ScanState::Idle) return;
+  if (cancelActiveScan && _scanState == ScanState::Scanning) {
+    esp_wifi_scan_stop();
+  }
+  WiFi.scanDelete();
+  _scanState = ScanState::Idle;
+  _scanStartedAt = 0;
+  _scanResultCount = 0;
+}
+
 void ESP32WiFiPortal::handleScan() {
   if (!_server) return;
 
-  int count = WiFi.scanNetworks(false, true);
-  if (count < 0) {
-    WiFi.scanDelete();
+  if (_connectPending || _connectAttemptActive) {
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(409, "application/json; charset=utf-8",
+                  "{\"networks\":[],\"error\":\"Wi-Fi connection in progress\"}");
+    return;
+  }
+
+  processScan();
+  if (_scanState == ScanState::Idle) {
+    const int16_t result = WiFi.scanNetworks(true, true);
+    _scanStartedAt = millis();
+    if (result == WIFI_SCAN_RUNNING) {
+      _scanState = ScanState::Scanning;
+    } else if (result >= 0) {
+      _scanResultCount = result;
+      _scanState = ScanState::Ready;
+    } else {
+      WiFi.scanDelete();
+      _scanState = ScanState::Failed;
+    }
+  }
+
+  if (_scanState == ScanState::Scanning) {
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->sendHeader("Retry-After", "1");
+    _server->send(202, "application/json; charset=utf-8",
+                  "{\"scanning\":true}");
+    return;
+  }
+
+  if (_scanState == ScanState::Failed) {
     _server->sendHeader("Cache-Control", "no-store");
     _server->send(503, "application/json; charset=utf-8",
                   "{\"networks\":[],\"error\":\"Wi-Fi scan failed\"}");
+    resetScan(false);
     return;
   }
+
+  const int count = _scanResultCount;
 
   if (static_cast<size_t>(count) > _scanNetworkIdentityCapacity) {
     std::unique_ptr<ScanNetworkIdentity[]> identities(
@@ -418,7 +483,7 @@ void ESP32WiFiPortal::handleScan() {
   }
 
   _responseBuffer += F("]}");
-  WiFi.scanDelete();
+  resetScan(false);
 
   _server->sendHeader("Cache-Control", "no-store");
   _server->send(200, "application/json; charset=utf-8", _responseBuffer);
@@ -447,8 +512,11 @@ void ESP32WiFiPortal::handleSave() {
     return;
   }
 
+  // A valid connection request takes priority over a scan started by another
+  // Portal client. The normal UI only submits after scan results are ready.
+  resetScan(true);
+
   _connectPending = true;
-  _connectAttemptActive = false;
   _connectPendingAt = millis();
   _connectPendingDelayMs = 350;
   _portalRetriesUsed = 0;
@@ -495,6 +563,7 @@ void ESP32WiFiPortal::process() {
   processWiFiEvents();
 
   if (_portalActive) {
+    processScan();
     _dns.processNextRequest();
     if (_server) _server->handleClient();
 
@@ -517,9 +586,18 @@ void ESP32WiFiPortal::process() {
     if (_connectPending && !_connectAttemptActive &&
         millis() - _connectPendingAt >= _connectPendingDelayMs) {
       beginPendingConnection();
+      return;
     }
 
     if (_connectAttemptActive && _connectionOwner == ConnectionOwner::Portal) {
+      if (!advanceSTAConnection()) {
+        clearPendingConnection(false);
+        _state = State::Portal;
+        return;
+      }
+
+      if (_connectionPhase != ConnectionPhase::Connecting) return;
+
       if (WiFi.status() == WL_CONNECTED) {
         if (!saveCredentials(_pendingSSID, _pendingPassword)) {
           clearPendingConnection(true);
@@ -553,8 +631,7 @@ void ESP32WiFiPortal::beginPendingConnection() {
 
   _connectPending = false;
   _lastError = "";
-  if (!beginSTAConnection(_pendingSSID, _pendingPassword,
-                          ConnectionOwner::Portal)) {
+  if (!beginSTAConnection(ConnectionOwner::Portal)) {
     clearPendingConnection(false);
     _state = State::Portal;
   }
@@ -565,10 +642,8 @@ void ESP32WiFiPortal::clearPendingConnection(bool disconnectSTA) {
   if (disconnectSTA && ownsSTA && _connectAttemptActive) {
     cancelSTAConnection();
   } else if (ownsSTA) {
-    _connectAttemptActive = false;
-    _connectionOwner = ConnectionOwner::None;
-    _connectAttemptAt = 0;
-    _attemptTerminalFailure = false;
+    releaseSTAConnection();
+    _staDisconnected = WiFi.status() != WL_CONNECTED;
   }
 
   _connectPending = false;
@@ -607,9 +682,12 @@ void ESP32WiFiPortal::failPendingConnection(bool terminalFailure) {
                : "Unable to connect. Check the SSID/password and try again.");
 }
 
-bool ESP32WiFiPortal::beginSTAConnection(const String& ssid,
-                                         const String& password,
-                                         ConnectionOwner owner) {
+bool ESP32WiFiPortal::beginSTAConnection(ConnectionOwner owner) {
+  if (_connectAttemptActive || owner == ConnectionOwner::None) {
+    setError("A Wi-Fi connection attempt is already running");
+    return false;
+  }
+
   ensureWiFiEventHandler();
   WiFi.setAutoReconnect(false);
 
@@ -620,20 +698,60 @@ bool ESP32WiFiPortal::beginSTAConnection(const String& ssid,
     if (_portalActive) WiFi.softAPsetHostname(_hostname.c_str());
   }
 
-  WiFi.disconnect(false, false);
-  delay(20);
+  _connectionOwner = owner;
+  _connectionPhase = ConnectionPhase::Settling;
+  _connectAttemptActive = true;
+  _connectAttemptAt = 0;
+  _connectionPhaseAt = millis();
+  _connectionSettleDelayMs = 0;
+  _attemptTerminalFailure = false;
+
+  // cancelSTAConnection() already leaves STA clean. Avoid a second disconnect
+  // before the next retry, but remain conservative for the first attempt or a
+  // currently connected interface.
+  if (!_staDisconnected || WiFi.status() == WL_CONNECTED) {
+    WiFi.disconnect(false, false);
+    _staDisconnected = true;
+    _connectionSettleDelayMs = kSTADisconnectSettleMs;
+  }
+  return true;
+}
+
+bool ESP32WiFiPortal::advanceSTAConnection() {
+  if (!_connectAttemptActive) return false;
+  if (_connectionPhase == ConnectionPhase::Connecting) return true;
+  if (_connectionPhase != ConnectionPhase::Settling) return false;
+  if (millis() - _connectionPhaseAt < _connectionSettleDelayMs) return true;
+
   if (!applySTAConfig()) {
+    cancelSTAConnection();
     setError("Failed to apply STA IP/DNS configuration");
     return false;
   }
 
-  _connectionOwner = owner;
-  _connectAttemptActive = true;
+  const String* ssid = nullptr;
+  const String* password = nullptr;
+  if (_connectionOwner == ConnectionOwner::Portal) {
+    ssid = &_pendingSSID;
+    password = &_pendingPassword;
+  } else if (_connectionOwner == ConnectionOwner::Blocking ||
+             _connectionOwner == ConnectionOwner::Reconnect) {
+    ssid = &_savedSSID;
+    password = &_savedPassword;
+  }
+  if (!ssid || ssid->length() == 0 || !password) {
+    cancelSTAConnection();
+    setError("Wi-Fi credentials are unavailable");
+    return false;
+  }
+
+  _connectionPhase = ConnectionPhase::Connecting;
   _connectAttemptAt = millis();
   _attemptTerminalFailure = false;
   log(F("[EWP] Connect"));
 
-  const wl_status_t result = WiFi.begin(ssid.c_str(), password.c_str());
+  _staDisconnected = false;
+  const wl_status_t result = WiFi.begin(ssid->c_str(), password->c_str());
   if (result == WL_CONNECT_FAILED) {
     cancelSTAConnection();
     setError("Unable to start Wi-Fi connection");
@@ -654,13 +772,26 @@ bool ESP32WiFiPortal::applySTAConfig() {
                      IPAddress(), IPAddress());
 }
 
-void ESP32WiFiPortal::cancelSTAConnection() {
-  const bool wasActive = _connectAttemptActive;
+void ESP32WiFiPortal::releaseSTAConnection() {
   _connectAttemptActive = false;
   _connectionOwner = ConnectionOwner::None;
+  _connectionPhase = ConnectionPhase::Idle;
   _connectAttemptAt = 0;
+  _connectionPhaseAt = 0;
+  _connectionSettleDelayMs = 0;
   _attemptTerminalFailure = false;
-  if (wasActive) WiFi.disconnect(false, false);
+}
+
+void ESP32WiFiPortal::cancelSTAConnection() {
+  const bool disconnectSTA =
+      _connectAttemptActive &&
+      _connectionPhase == ConnectionPhase::Connecting &&
+      !_staDisconnected;
+  releaseSTAConnection();
+  if (disconnectSTA) {
+    WiFi.disconnect(false, false);
+    _staDisconnected = true;
+  }
 }
 
 void ESP32WiFiPortal::processWiFiEvents() {
@@ -671,8 +802,10 @@ void ESP32WiFiPortal::processWiFiEvents() {
   if ((events & kEventSTAConnected) != 0 && _loggingEnabled) {
     Serial.println(F("[EWP] STA connected"));
   }
+  if ((events & kEventSTAConnected) != 0) _staDisconnected = false;
 
   if ((events & kEventSTAGotIP) != 0 && connectedNow) {
+    _staDisconnected = false;
     if (_loggingEnabled) {
       Serial.print(F("[EWP] Got IP: "));
       Serial.println(WiFi.localIP());
@@ -690,6 +823,7 @@ void ESP32WiFiPortal::processWiFiEvents() {
   if (reason == 0) reason = WIFI_REASON_UNSPECIFIED;
   _lastDisconnectReason = reason;
   logDisconnect(reason);
+  if (!_connectAttemptActive && !connectedNow) _staDisconnected = true;
   if (connectedNow || reason == WIFI_REASON_ASSOC_LEAVE) return;
 
   if (_connectAttemptActive) {
@@ -697,7 +831,8 @@ void ESP32WiFiPortal::processWiFiEvents() {
     // a router restart. Only an unproven Portal/initial blocking candidate is
     // allowed to treat a clear credential rejection as terminal. Reconnect
     // always remains recoverable through its bounded cooldown policy.
-    if (_connectionOwner != ConnectionOwner::Reconnect) {
+    if (_connectionPhase == ConnectionPhase::Connecting &&
+        _connectionOwner != ConnectionOwner::Reconnect) {
       _attemptTerminalFailure =
           _attemptTerminalFailure || isCredentialFailureReason(reason);
     }
@@ -714,11 +849,15 @@ void ESP32WiFiPortal::processAutoReconnect() {
   if (!_autoReconnectEnabled || _portalActive) return;
 
   if (_connectAttemptActive && _connectionOwner == ConnectionOwner::Reconnect) {
+    if (!advanceSTAConnection()) {
+      scheduleNextAutoReconnect();
+      return;
+    }
+    if (_connectionPhase != ConnectionPhase::Connecting) return;
+
     if (WiFi.status() == WL_CONNECTED) {
-      _connectAttemptActive = false;
-      _connectionOwner = ConnectionOwner::None;
-      _connectAttemptAt = 0;
-      _attemptTerminalFailure = false;
+      releaseSTAConnection();
+      _staDisconnected = false;
       _reconnectScheduled = false;
       _reconnectRetriesUsed = 0;
       _lastError = "";
@@ -745,6 +884,7 @@ void ESP32WiFiPortal::processAutoReconnect() {
   if (WiFi.status() == WL_CONNECTED) {
     _reconnectScheduled = false;
     _reconnectRetriesUsed = 0;
+    _staDisconnected = false;
     _state = State::Connected;
     return;
   }
@@ -774,8 +914,7 @@ void ESP32WiFiPortal::processAutoReconnect() {
   }
 
   _state = State::Connecting;
-  if (!beginSTAConnection(_savedSSID, _savedPassword,
-                          ConnectionOwner::Reconnect)) {
+  if (!beginSTAConnection(ConnectionOwner::Reconnect)) {
     scheduleNextAutoReconnect();
   }
 }
@@ -825,10 +964,8 @@ void ESP32WiFiPortal::cancelAutoReconnect(bool disconnectSTA) {
     if (disconnectSTA) {
       cancelSTAConnection();
     } else {
-      _connectAttemptActive = false;
-      _connectionOwner = ConnectionOwner::None;
-      _connectAttemptAt = 0;
-      _attemptTerminalFailure = false;
+      releaseSTAConnection();
+      _staDisconnected = WiFi.status() != WL_CONNECTED;
     }
   }
 }
@@ -845,10 +982,8 @@ uint32_t ESP32WiFiPortal::retryDelay(uint8_t retryNumber) const {
   return delayMs > _maxRetryIntervalMs ? _maxRetryIntervalMs : delayMs;
 }
 
-bool ESP32WiFiPortal::connect(const String& ssid,
-                              const String& password,
-                              uint32_t timeoutMs) {
-  if (ssid.length() == 0) {
+bool ESP32WiFiPortal::connect(uint32_t timeoutMs) {
+  if (_savedSSID.length() == 0) {
     setError("SSID cannot be empty");
     _state = State::Failed;
     return false;
@@ -865,13 +1000,24 @@ bool ESP32WiFiPortal::connect(const String& ssid,
   uint8_t retriesUsed = 0;
 
   while (true) {
-    if (!beginSTAConnection(ssid, password, ConnectionOwner::Blocking)) {
+    if (!beginSTAConnection(ConnectionOwner::Blocking)) {
       _state = State::Failed;
       return false;
     }
 
-    while (WiFi.status() != WL_CONNECTED) {
+    bool setupFailed = false;
+    while (true) {
       processWiFiEvents();
+      if (!advanceSTAConnection()) {
+        setupFailed = true;
+        break;
+      }
+      if (_connectionPhase != ConnectionPhase::Connecting) {
+        delay(1);
+        yield();
+        continue;
+      }
+      if (WiFi.status() == WL_CONNECTED) break;
       if (_attemptTerminalFailure ||
           (timeoutMs > 0 && millis() - _connectAttemptAt >= timeoutMs)) {
         break;
@@ -880,11 +1026,14 @@ bool ESP32WiFiPortal::connect(const String& ssid,
       yield();
     }
 
+    if (setupFailed) {
+      _state = State::Failed;
+      return false;
+    }
+
     if (WiFi.status() == WL_CONNECTED) {
-      _connectAttemptActive = false;
-      _connectionOwner = ConnectionOwner::None;
-      _connectAttemptAt = 0;
-      _attemptTerminalFailure = false;
+      releaseSTAConnection();
+      _staDisconnected = false;
       _state = State::Connected;
       invoke(_onConnected);
       return true;
@@ -926,6 +1075,7 @@ void ESP32WiFiPortal::stopConfigPortal() {
     _server.reset();
   }
   _dns.stop();
+  resetScan(true);
 
   if (wasPortalActive) {
     WiFi.softAPdisconnect(true);
