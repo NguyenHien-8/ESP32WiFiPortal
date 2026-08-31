@@ -2,8 +2,44 @@
 #include "PortalPage.h"
 
 namespace {
-const IPAddress kDefaultPortalIP(200, 5, 29, 8);
-const IPAddress kDefaultPortalSubnet(255, 255, 255, 0);
+uint32_t ipToUint32(const IPAddress& address) {
+  return (static_cast<uint32_t>(address[0]) << 24) |
+         (static_cast<uint32_t>(address[1]) << 16) |
+         (static_cast<uint32_t>(address[2]) << 8) |
+         static_cast<uint32_t>(address[3]);
+}
+
+bool isPrivateIPv4(const IPAddress& address) {
+  return address[0] == 10 ||
+         (address[0] == 172 && address[1] >= 16 && address[1] <= 31) ||
+         (address[0] == 192 && address[1] == 168);
+}
+
+bool isValidPortalNetwork(const IPAddress& localIP,
+                          const IPAddress& gateway,
+                          const IPAddress& subnet) {
+  if (!isPrivateIPv4(localIP) || !isPrivateIPv4(gateway)) return false;
+
+  const uint32_t local = ipToUint32(localIP);
+  const uint32_t gatewayValue = ipToUint32(gateway);
+  const uint32_t mask = ipToUint32(subnet);
+  if (mask == 0 || mask == 0xFFFFFFFFUL) return false;
+
+  const uint32_t hostMask = ~mask;
+  if ((hostMask & (hostMask + 1UL)) != 0) return false;
+
+  uint32_t minimumPrivateMask = 0xFF000000UL;  // 10.0.0.0/8
+  if (localIP[0] == 172) minimumPrivateMask = 0xFFF00000UL;  // 172.16.0.0/12
+  if (localIP[0] == 192) minimumPrivateMask = 0xFFFF0000UL;  // 192.168.0.0/16
+  if ((mask & minimumPrivateMask) != minimumPrivateMask) return false;
+
+  if ((local & mask) != (gatewayValue & mask)) return false;
+
+  const uint32_t localHost = local & hostMask;
+  const uint32_t gatewayHost = gatewayValue & hostMask;
+  return localHost != 0 && localHost != hostMask &&
+         gatewayHost != 0 && gatewayHost != hostMask;
+}
 }  // namespace
 
 constexpr uint16_t ESP32WiFiPortal::kDnsPort;
@@ -12,13 +48,20 @@ constexpr const char* ESP32WiFiPortal::kPrefsNamespace;
 constexpr const char* ESP32WiFiPortal::kPrefsSSID;
 constexpr const char* ESP32WiFiPortal::kPrefsPassword;
 
-ESP32WiFiPortal::ESP32WiFiPortal() = default;
+ESP32WiFiPortal::ESP32WiFiPortal()
+    : _portalIP(192, 168, 4, 1),
+      _portalGateway(192, 168, 4, 1),
+      _portalSubnet(255, 255, 255, 0) {}
 
 ESP32WiFiPortal::~ESP32WiFiPortal() {
   stopConfigPortal();
 }
 
 bool ESP32WiFiPortal::connectSaved(uint32_t timeoutMs) {
+  if (_portalActive) {
+    stopConfigPortal();
+  }
+
   String ssid;
   String password;
   if (!loadCredentials(ssid, password) || ssid.length() == 0) {
@@ -82,7 +125,7 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   _connectAttemptActive = false;
 
   WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAPConfig(kDefaultPortalIP, kDefaultPortalIP, kDefaultPortalSubnet)) {
+  if (!WiFi.softAPConfig(_portalIP, _portalGateway, _portalSubnet)) {
     WiFi.softAPdisconnect(true);
     setError("Failed to configure captive portal IP");
     _state = State::Failed;
@@ -213,6 +256,11 @@ void ESP32WiFiPortal::handleSave() {
     return;
   }
 
+  if (_connectPending || _connectAttemptActive) {
+    _server->send(409, "text/plain; charset=utf-8", "A Wi-Fi connection attempt is already running");
+    return;
+  }
+
   _pendingSSID = ssid;
   _pendingPassword = password;
   _connectPending = true;
@@ -258,42 +306,42 @@ void ESP32WiFiPortal::process() {
   _dns.processNextRequest();
   if (_server) _server->handleClient();
 
+  if (portalTimedOut()) {
+    const bool hadCandidateAttempt = _connectAttemptActive;
+    setError("Configuration portal timed out");
+    stopConfigPortal();
+    _state = !hadCandidateAttempt && WiFi.status() == WL_CONNECTED
+                 ? State::Connected
+                 : State::Failed;
+    return;
+  }
+
   if (_connectPending && !_connectAttemptActive && millis() - _connectPendingAt >= 350) {
     beginPendingConnection();
   }
 
   if (_connectAttemptActive) {
     if (WiFi.status() == WL_CONNECTED) {
-      _connectAttemptActive = false;
       if (!saveCredentials(_pendingSSID, _pendingPassword)) {
+        clearPendingConnection(true);
+        _state = State::Portal;
         setError("Connected, but unable to save Wi-Fi settings");
         return;
       }
+      clearPendingConnection(false);
       _state = State::Connected;
       invoke(_onCredentialsSaved);
       invoke(_onConnected);
-      _pendingSSID = "";
-      _pendingPassword = "";
       stopConfigPortal();
       _state = State::Connected;
       return;
     }
 
     if (_connectTimeoutMs > 0 && millis() - _connectAttemptAt >= _connectTimeoutMs) {
-      WiFi.disconnect(false, false);
-      _connectAttemptActive = false;
-      _connectPending = false;
-      _pendingSSID = "";
-      _pendingPassword = "";
+      clearPendingConnection(true);
       _state = State::Portal;
       setError("Unable to connect. Check the SSID/password and try again.");
     }
-  }
-
-  if (portalTimedOut()) {
-    setError("Configuration portal timed out");
-    stopConfigPortal();
-    _state = State::Failed;
   }
 }
 
@@ -316,6 +364,20 @@ void ESP32WiFiPortal::beginPendingConnection() {
   WiFi.begin(_pendingSSID.c_str(), _pendingPassword.c_str());
 }
 
+void ESP32WiFiPortal::clearPendingConnection(bool disconnectSTA) {
+  const bool shouldDisconnect = disconnectSTA && _connectAttemptActive;
+  _connectPending = false;
+  _connectAttemptActive = false;
+  _connectPendingAt = 0;
+  _connectAttemptAt = 0;
+  _pendingSSID = String();
+  _pendingPassword = String();
+
+  if (shouldDisconnect) {
+    WiFi.disconnect(false, false);
+  }
+}
+
 bool ESP32WiFiPortal::connect(const String& ssid,
                               const String& password,
                               uint32_t timeoutMs) {
@@ -323,6 +385,10 @@ bool ESP32WiFiPortal::connect(const String& ssid,
     setError("SSID cannot be empty");
     _state = State::Failed;
     return false;
+  }
+
+  if (_portalActive) {
+    stopConfigPortal();
   }
 
   _state = State::Connecting;
@@ -353,22 +419,28 @@ bool ESP32WiFiPortal::connect(const String& ssid,
 }
 
 void ESP32WiFiPortal::stopConfigPortal() {
+  const bool wasPortalActive = _portalActive;
+  const bool hadCandidateAttempt = _connectAttemptActive;
+  _portalActive = false;
+  clearPendingConnection(true);
+
   if (_server) {
     _server->stop();
     _server.reset();
   }
   _dns.stop();
 
-  if (_portalActive) {
+  if (wasPortalActive) {
     WiFi.softAPdisconnect(true);
   }
 
-  _portalActive = false;
-  _connectPending = false;
-  _connectAttemptActive = false;
-  _pendingSSID = "";
-  _pendingPassword = "";
-  if (_state == State::Portal) _state = State::Idle;
+  _portalTimeoutMs = 0;
+  _portalStartedAt = 0;
+  if (_state == State::Portal) {
+    _state = !hadCandidateAttempt && WiFi.status() == WL_CONNECTED
+                 ? State::Connected
+                 : State::Idle;
+  }
 }
 
 bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password) {
@@ -414,10 +486,34 @@ bool ESP32WiFiPortal::eraseCredentials(bool disconnect) {
   prefs.end();
 
   if (disconnect) {
+    stopConfigPortal();
     WiFi.disconnect(true, true);
     _state = State::Idle;
   }
   return ok;
+}
+
+bool ESP32WiFiPortal::setPortalIP(const IPAddress& localIP) {
+  return setPortalIP(localIP, localIP, IPAddress(255, 255, 255, 0));
+}
+
+bool ESP32WiFiPortal::setPortalIP(const IPAddress& localIP,
+                                  const IPAddress& gateway,
+                                  const IPAddress& subnet) {
+  if (_portalActive) {
+    setError("Portal IP cannot be changed while the portal is active");
+    return false;
+  }
+  if (!isValidPortalNetwork(localIP, gateway, subnet)) {
+    setError("Portal IP, gateway, or subnet is not a usable private IPv4 network");
+    return false;
+  }
+
+  _portalIP = localIP;
+  _portalGateway = gateway;
+  _portalSubnet = subnet;
+  _lastError = "";
+  return true;
 }
 
 void ESP32WiFiPortal::setHostname(const char* hostname) {
@@ -461,7 +557,7 @@ ESP32WiFiPortal::State ESP32WiFiPortal::state() const {
 }
 
 IPAddress ESP32WiFiPortal::portalIP() const {
-  return WiFi.softAPIP();
+  return _portalIP;
 }
 
 String ESP32WiFiPortal::portalSSID() const {

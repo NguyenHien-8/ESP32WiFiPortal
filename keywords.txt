@@ -4,4 +4,7 @@ connectSaved	KEYWORD2
 startConfigPortal	KEYWORD2
 startConfigPortalAsync	KEYWORD2
 process	KEYWORD2
+stopConfigPortal	KEYWORD2
+setPortalIP	KEYWORD2
+portalIP	KEYWORD2
 eraseCredentials	KEYWORD2

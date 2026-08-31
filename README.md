@@ -1,17 +1,16 @@
-# ESP32WiFiPortal
+# ESP32WiFiPortal 1.1.1
 
-ESP32-only, Wi-Fi provisioning library for Arduino-ESP32.
+ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 
 ## Features
 
-- ESP32 only
-- AP mode + DNS captive redirect
-- Fixed setup fallback address: `http://200.5.29.8`
-- Wi-Fi network scanning
-- SSID/password storage in ESP32 Preferences/NVS
-- Blocking and non-blocking portal modes
-- On-demand configuration support
-- No third-party runtime dependencies
+- SoftAP captive portal with DNS redirection
+- Private default portal address: `192.168.4.1`
+- Configurable portal address through `setPortalIP(...)`
+- Wi-Fi scanning and Preferences/NVS credential storage
+- Blocking, non-blocking, and on-demand portal modes
+- Safe cancellation of pending STA attempts when the portal stops or times out
+- No third-party runtime dependency
 
 ## Minimal example
 
@@ -23,37 +22,68 @@ ESP32WiFiPortal portal;
 void setup() {
   Serial.begin(115200);
 
+  portal.onPortalStarted([]() {
+    Serial.print("Open http://");
+    Serial.println(portal.portalIP());
+  });
+
   if (!portal.autoConnect("ESP32-Setup", "12345678")) {
     Serial.println(portal.lastError());
-    return;
   }
-
-  Serial.println(WiFi.localIP());
 }
 
 void loop() {}
 ```
 
-When the setup AP is active, the captive portal uses `200.5.29.8`. If a name
-configured with `setHostname()` is not resolved by the phone or computer, open
-`http://200.5.29.8` directly while still connected to the setup AP.
+The default portal address is `192.168.4.1`. `portalIP()` also returns the
+configured address before the portal starts.
 
-## Recommended production flow
+## Custom portal IP
 
-For deployed devices, do **not** automatically open AP mode every time the router is temporarily unavailable. Prefer:
+Configure the portal before starting it:
 
-1. Boot and attempt the saved Wi-Fi credentials.
-2. If connection fails, remain offline and retry according to application policy.
-3. Enter configuration AP mode only after an explicit button hold or other local user action.
-4. Save new credentials, stop the portal, and reconnect.
+```cpp
+if (!portal.setPortalIP(IPAddress(192, 168, 50, 1))) {
+  Serial.println(portal.lastError());
+}
+```
 
-See `examples/OnDemand`.
+The one-argument overload uses the local IP as gateway and a
+`255.255.255.0` subnet. An explicit network can also be supplied:
+
+```cpp
+portal.setPortalIP(
+    IPAddress(10, 10, 0, 1),
+    IPAddress(10, 10, 0, 1),
+    IPAddress(255, 255, 255, 0));
+```
+
+Only usable RFC 1918 host addresses are accepted. The address and gateway must
+belong to the same valid subnet. The configuration cannot be changed while the
+portal is active.
+
+## Portal timeout and stop behavior
+
+Both blocking and asynchronous modes use the same state machine. When a portal
+timeout or `stopConfigPortal()` occurs during a new STA connection attempt, the
+library disconnects that attempt, clears pending credentials from RAM, stops the
+HTTP server and DNS, and shuts down only the SoftAP interface. Stored credentials
+are not modified until a new STA connection succeeds.
+
+If the ESP32 was already connected before opening the portal and no replacement
+attempt is running, stopping the portal leaves that STA connection intact. A
+timed-out blocking portal returns `false` when no STA connection remains; async
+code can inspect `state()` and `lastError()` after `process()`.
+
+For deployed devices, prefer an explicit button or other local action before
+opening configuration mode. See `examples/OnDemand`.
 
 ## API summary
 
 ```cpp
 bool connectSaved(uint32_t timeoutMs = 15000);
-bool autoConnect(const char* apSSID, const char* apPassword = nullptr,
+bool autoConnect(const char* apSSID = "ESP32-Setup",
+                 const char* apPassword = nullptr,
                  uint32_t connectTimeoutMs = 15000,
                  uint32_t portalTimeoutMs = 0);
 bool startConfigPortal(const char* apSSID = "ESP32-Setup",
@@ -64,34 +94,38 @@ bool startConfigPortalAsync(const char* apSSID = "ESP32-Setup",
                             uint32_t portalTimeoutMs = 0);
 void process();
 void stopConfigPortal();
+
+bool setPortalIP(const IPAddress& localIP);
+bool setPortalIP(const IPAddress& localIP,
+                 const IPAddress& gateway,
+                 const IPAddress& subnet);
+
 bool eraseCredentials(bool disconnect = true);
 ```
 
-## Security notes
+## Compatibility notes for 1.1.1
 
-- Use an AP password of at least 8 characters in production.
-- Wi-Fi credentials are stored in ESP32 NVS. They are not application-level encrypted by this library.
-- The captive portal is HTTP on the local setup AP. Do not expose it to an untrusted network.
+- Existing public APIs remain source-compatible.
+- The default SoftAP address changed from `200.5.29.8` to `192.168.4.1`.
+- `setPortalIP(...)` is additive; existing sketches need no source changes.
+- The captive portal remains HTTP on the isolated setup AP. Use a strong AP
+  password and do not expose the setup network to untrusted clients.
 
 ## Repository layout
 
 ```text
 ESP32WiFiPortal/
 ├── src/
-│   ├── ESP32WiFiPortal.h
-│   ├── ESP32WiFiPortal.cpp
-│   └── PortalPage.h
 ├── examples/
 │   ├── Basic/
-│   ├── OnDemand/
-│   └── NonBlocking/
+│   ├── CustomIP/
+│   ├── NonBlocking/
+│   └── OnDemand/
 ├── docs/
-│   └── ARCHITECTURE.md
+│   ├── ARCHITECTURE.md
+│   └── FlowChart.md
 ├── library.properties
-├── library.json
-├── keywords.txt
-├── LICENSE
-└── README.md
+└── library.json
 ```
 
 ## License

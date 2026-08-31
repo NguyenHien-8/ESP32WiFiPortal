@@ -64,8 +64,13 @@ public:
   String savedSSID();
   bool eraseCredentials(bool disconnect = true);
 
-  // Optional tuning. During setup, use http://200.5.29.8 if the hostname
-  // cannot be resolved by the client device.
+  // Optional tuning.
+  // The one-argument overload uses localIP as the gateway and a /24 subnet.
+  // Portal addressing can only be changed while the portal is stopped.
+  bool setPortalIP(const IPAddress& localIP);
+  bool setPortalIP(const IPAddress& localIP,
+                   const IPAddress& gateway,
+                   const IPAddress& subnet);
   void setHostname(const char* hostname);
   void setConnectTimeout(uint32_t timeoutMs);
   void setAPChannel(uint8_t channel);
@@ -96,6 +101,7 @@ private:
   void handleNotFound();
   void handleCaptiveProbe();
   void beginPendingConnection();
+  void clearPendingConnection(bool disconnectSTA);
 
   bool connect(const String& ssid, const String& password, uint32_t timeoutMs);
   bool saveCredentials(const String& ssid, const String& password);
@@ -112,6 +118,7 @@ private:
   bool _portalActive = false;
   bool _connectPending = false;
   bool _connectAttemptActive = false;
+
   uint32_t _connectTimeoutMs = 15000;
   uint32_t _portalTimeoutMs = 0;
   uint32_t _portalStartedAt = 0;
@@ -120,6 +127,10 @@ private:
 
   uint8_t _apChannel = 1;
   bool _apHidden = false;
+
+  IPAddress _portalIP;
+  IPAddress _portalGateway;
+  IPAddress _portalSubnet;
 
   String _hostname;
   String _portalSSID;

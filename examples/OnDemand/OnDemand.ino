@@ -30,8 +30,7 @@ void loop() {
 
     // Blocking portal. Change the AP password for production use.
     if (wifiPortal.startConfigPortal("ESP32-Setup", "12345678", 300000)) {
-      Serial.print("Connected to: ");
-      Serial.println(WiFi.SSID());
+      Serial.println("Connected to the selected Wi-Fi network.");
     } else {
       Serial.print("Portal ended: ");
       Serial.println(wifiPortal.lastError());
