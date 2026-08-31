@@ -1,3 +1,13 @@
+/**
+ * @file ESP32WiFiPortal.h
+ * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
+ * @brief ESP32 Wi-Fi captive portal library header
+ * @version 1.1.1
+ * @date 2026-08-31
+ * 
+ * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
+ */
+
 #pragma once
 
 #include <Arduino.h>

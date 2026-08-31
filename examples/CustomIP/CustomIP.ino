@@ -1,3 +1,13 @@
+/**
+ * @file CustomIP.ino
+ * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
+ * @brief Example sketch demonstrating the usage of ESP32WiFiPortal library with custom portal IP address.
+ * @version 1.1.1
+ * @date 2026-08-31
+ * 
+ * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
+ */
+
 #include <ESP32WiFiPortal.h>
 
 ESP32WiFiPortal wifiPortal;

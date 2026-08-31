@@ -1,6 +1,16 @@
+/**
+ * @file OnDemand.ino
+ * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
+ * @brief Example sketch demonstrating on-demand Wi-Fi configuration portal using ESP32WiFiPortal library.
+ * @version 1.1.1
+ * @date 2026-08-31
+ * 
+ * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
+ */
+
 #include <ESP32WiFiPortal.h>
 
-constexpr uint8_t CONFIG_BUTTON_PIN = 23;  // Active LOW example
+constexpr uint8_t CONFIG_BUTTON_PIN = 35;  // Active LOW example
 constexpr uint32_t HOLD_TIME_MS = 3000;
 
 ESP32WiFiPortal wifiPortal;
