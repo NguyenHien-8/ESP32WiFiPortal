@@ -17,6 +17,8 @@ void setup() {
 }
 
 void loop() {
+  wifiPortal.process();
+
   const bool pressed = digitalRead(CONFIG_BUTTON_PIN) == LOW;
 
   if (pressed && pressedAt == 0) {

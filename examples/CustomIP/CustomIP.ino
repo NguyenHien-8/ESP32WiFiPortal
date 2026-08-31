@@ -23,4 +23,7 @@ void setup() {
   }
 }
 
-void loop() {}
+void loop() {
+  wifiPortal.process();
+  delay(2);
+}

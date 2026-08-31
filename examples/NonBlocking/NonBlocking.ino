@@ -24,7 +24,7 @@ void setup() {
 }
 
 void loop() {
-  // Required only while using the async/non-blocking portal.
+  // Required for the async portal and library-managed Auto Reconnect.
   wifiPortal.process();
 
   // Your application code can continue running here.

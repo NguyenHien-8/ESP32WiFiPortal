@@ -23,4 +23,7 @@ void setup() {
   Serial.println(WiFi.localIP());
 }
 
-void loop() {}
+void loop() {
+  wifiPortal.process();
+  delay(2);
+}

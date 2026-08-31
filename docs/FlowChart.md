@@ -1,7 +1,27 @@
 # Lưu đồ hoạt động ESP32WiFiPortal 1.1.1
 
-Tài liệu này mô tả luồng xử lý hiện tại của thư viện cho cả chế độ blocking và
-non-blocking. Hai chế độ dùng chung hàm `process()` và cùng một đường dọn dẹp.
+Tài liệu này mô tả state machine chung cho kết nối blocking, Config Portal
+non-blocking, Wi-Fi event, retry và Auto Reconnect.
+
+## Cấu hình địa chỉ STA
+
+```mermaid
+flowchart TD
+    A[Ứng dụng chọn cấu hình STA] --> B{Gọi setSTAStaticIP?}
+    B -- Không --> C[DHCP mặc định]
+    B -- Có --> D{IP và Gateway là host khác nhau cùng subnet?}
+    D -- Không --> E[Trả false và giữ cấu hình cũ]
+    D -- Có --> F{DNS hợp lệ?}
+    F -- Không --> E
+    F -- Có --> G[Lưu Static IP và DNS trong object]
+    C --> H[Trước WiFi.begin gọi WiFi.config với địa chỉ zero]
+    G --> I[Trước WiFi.begin gọi WiFi.config với Static IP và DNS]
+    H --> J[Chỉ cấu hình STA]
+    I --> J
+```
+
+`useSTADHCP()` chọn lại DHCP cho lần kết nối do thư viện quản lý tiếp theo. Cấu
+hình STA không đọc hoặc thay đổi Portal IP của SoftAP.
 
 ## Khởi động và kết nối credential đã lưu
 
@@ -16,7 +36,7 @@ flowchart TD
     F --> G
     G --> H{Có credential trong NVS?}
     H -- Không --> I{Đang dùng autoConnect?}
-    H -- Có --> J[Bắt đầu STA connection]
+    H -- Có --> J[Áp dụng DHCP hoặc Static STA IP và bắt đầu connection]
     J --> K{Kết nối trước timeout?}
     K -- Có --> L[State = Connected]
     K -- Không --> M[WiFi.disconnect và State = Failed]
@@ -66,8 +86,12 @@ flowchart TD
     H --> I{STA đã connected?}
     I -- Chưa --> J{Đã quá connect timeout?}
     J -- Chưa --> I
-    J -- Có --> K[Hủy STA attempt và xóa credential tạm]
-    K --> L[State = Portal để người dùng thử lại]
+    J -- Có --> K{Lỗi authentication?}
+    K -- Có --> L[Hủy attempt, không retry, giữ Portal]
+    K -- Không --> R{Còn retry đã cấu hình?}
+    R -- Có --> S[Đặt lịch retry bằng millis và backoff]
+    S --> H
+    R -- Không --> T[Xóa credential tạm, giữ Portal]
     I -- Có --> M[Ghi credential mới vào Preferences/NVS]
     M --> N{Ghi thành công?}
     N -- Không --> O[Ngắt candidate STA, xóa dữ liệu tạm, giữ Portal]
@@ -77,6 +101,36 @@ flowchart TD
 
 Credential cũ trong NVS không bị thay đổi khi candidate không kết nối được hoặc
 khi Portal hết thời gian. Việc ghi chỉ diễn ra sau khi `WL_CONNECTED`.
+
+## Wi-Fi event và Auto Reconnect
+
+```mermaid
+flowchart TD
+    A[Arduino Wi-Fi event task] --> B{Event nào?}
+    B -- STA Connected --> C[Set atomic Connected bit]
+    B -- Got IP --> D[Set atomic Got-IP bit]
+    B -- Disconnected --> E[Lưu reason và set atomic Disconnect bit]
+    C --> F[Callback kết thúc ngay]
+    D --> F
+    E --> F
+    G[Ứng dụng gọi process] --> H[Atomic exchange để lấy event]
+    H --> I[Log ngắn và cập nhật state]
+    I --> J{Disconnect khi hoạt động bình thường?}
+    J -- Không --> K[Để owner hiện tại xử lý attempt]
+    J -- Có --> L{Authentication hoặc handshake failure?}
+    L -- Có --> M[State = Failed, không Auto Reconnect]
+    L -- Không --> N[Đặt lịch Reconnect sau retry interval]
+    N --> O[Thử hữu hạn với exponential backoff]
+    O --> P{Kết nối được?}
+    P -- Có --> Q[State = Connected, reset retry]
+    P -- Không --> R[Cooldown bằng max retry interval]
+    R --> N
+```
+
+Arduino-ESP32 Auto Reconnect được tắt khi event handler của thư viện được cài.
+Nhờ đó chỉ có state machine này gọi `WiFi.begin()` và hủy attempt. Lỗi mất AP là
+tạm thời nên sau cooldown thiết bị vẫn có thể phục hồi; lỗi password dừng hẳn.
+Callback không gọi Serial, DNS, WebServer, Preferences hoặc API Wi-Fi blocking.
 
 ## Timeout, stop và restart Portal
 
