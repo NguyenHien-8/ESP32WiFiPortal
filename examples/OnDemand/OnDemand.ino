@@ -10,6 +10,7 @@
 
 #include <ESP32WiFiPortal.h>
 
+// GPIO35 on the ESP32 does not have an internal pull-up; an external pull-up resistor is required.
 constexpr uint8_t CONFIG_BUTTON_PIN = 35;  // Active LOW example
 constexpr uint32_t HOLD_TIME_MS = 3000;
 
