@@ -95,8 +95,8 @@ public:
   bool isSTAStaticIPConfigured() const;
 
   // Library-managed reconnect is processed by process(). The retry count is
-  // the number of retries after the first attempt. Transient reconnects enter
-  // a capped cooldown after a retry burst; authentication failures stop.
+  // the number of retries after the first attempt. Reconnects enter a capped
+  // cooldown after a retry burst, including ambiguous authentication failures.
   void setAutoReconnect(bool enabled);
   bool autoReconnectEnabled() const;
   bool setConnectionRetryPolicy(uint8_t retryCount,
@@ -125,6 +125,11 @@ private:
     Blocking,
     Portal,
     Reconnect
+  };
+
+  struct ScanNetworkIdentity {
+    uint32_t hash;
+    int index;
   };
 
   static constexpr uint16_t kDnsPort = 53;
@@ -158,13 +163,15 @@ private:
   void processWiFiEvents();
   void processAutoReconnect();
   void scheduleAutoReconnect(uint32_t delayMs);
+  void scheduleNextAutoReconnect();
   void cancelAutoReconnect(bool disconnectSTA);
+  bool scheduleSavedConnectionRecovery();
   uint32_t retryDelay(uint8_t retryNumber) const;
   bool saveCredentials(const String& ssid, const String& password);
-  bool loadCredentials(String& ssid, String& password);
+  bool ensureCredentialCache();
   bool validAPPassword(const char* password) const;
   bool portalTimedOut() const;
-  bool isTerminalDisconnectReason(uint8_t reason) const;
+  bool isCredentialFailureReason(uint8_t reason) const;
   void setError(const String& message);
   void invoke(const Callback& callback);
   void log(const __FlashStringHelper* message) const;
@@ -223,6 +230,18 @@ private:
   String _portalSSID;
   String _pendingSSID;
   String _pendingPassword;
+  String _savedSSID;
+  String _savedPassword;
+  bool _credentialCacheLoaded = false;
+  bool _credentialCacheValid = false;
+
+  String _responseBuffer;
+  String _scanSSID;
+  String _scanCompareSSID;
+  String _redirectURL;
+  std::unique_ptr<ScanNetworkIdentity[]> _scanNetworkIdentities;
+  size_t _scanNetworkIdentityCapacity = 0;
+
   String _lastError;
 
   Callback _onPortalStarted;

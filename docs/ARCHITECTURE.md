@@ -63,7 +63,10 @@ This leaves exactly one owner for connection timing:
 - normal-operation reconnects run in finite bursts with exponential backoff;
 - after a transient burst, a capped cooldown permits recovery from a long router
   outage without a tight retry loop;
-- authentication/handshake reasons are terminal and stop automatic retry;
+- authentication/handshake failures for saved credentials remain recoverable,
+  because those reason codes are ambiguous under weak signal or router restart;
+- clear authentication rejection can still terminate an unproven Portal or
+  initial blocking candidate without changing the credentials in NVS;
 - voluntary `ASSOC_LEAVE` events caused by cleanup never schedule a reconnect.
 
 All elapsed-time tests use unsigned `millis()` subtraction and remain safe across
@@ -75,6 +78,10 @@ timer overflow.
   path around `WiFi.config()`, `WiFi.begin()`, and `WiFi.disconnect()`.
 - At most one library-managed STA attempt can be active.
 - A failed candidate never overwrites credentials in the `ewp_wifi` namespace.
+- Credentials are read into a synchronized object cache once and reused by
+  reconnect attempts; successful saves and erases update that cache.
+- Closing or timing out an unsuccessful Portal schedules the saved credentials
+  through the normal non-blocking reconnect cooldown, without reopening Portal.
 - Connect timeout, portal timeout, explicit stop, restart, and destruction clear
   candidate flags, timestamps, SSID, and password.
 - If a candidate attempt has reached `WiFi.begin()`, cleanup calls
@@ -84,6 +91,21 @@ timer overflow.
 - `connectSaved()` stops an active portal before switching to `WIFI_STA`.
 - `eraseCredentials(true)` coordinates successful NVS erasure with portal cleanup
   and Wi-Fi disconnection, so server and Wi-Fi state cannot diverge.
+
+## Heap behavior on repeated paths
+
+Saved SSID/password values are cached after the first Preferences read, so each
+Auto Reconnect attempt reuses the same buffers instead of reopening NVS and
+constructing short-lived `String` objects. Candidate buffers retain their small
+credential-sized capacity between Portal submissions and are synchronized with
+the cache only after a successful connection and NVS commit.
+
+Portal scan/status JSON shares one reserved response buffer while the Portal is
+active. Scan duplicate detection keeps compact SSID hashes and performs an exact
+SSID comparison on a hash match, avoiding the previous repeated `WiFi.SSID()`
+allocations for every earlier scan result. `WiFi.scanDelete()` still runs before
+the response is sent, and all scan-only capacity is released when the Portal
+stops.
 
 ## Design boundaries
 
