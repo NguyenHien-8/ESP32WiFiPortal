@@ -1,6 +1,16 @@
+/**
+ * @file OnDemand.ino
+ * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
+ * @brief Example sketch demonstrating on-demand Wi-Fi configuration portal using ESP32WiFiPortal library.
+ * @version 1.1.1
+ * @date 2026-08-31
+ * 
+ * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
+ */
+
 #include <ESP32WiFiPortal.h>
 
-constexpr uint8_t CONFIG_BUTTON_PIN = 23;  // Active LOW example
+constexpr uint8_t CONFIG_BUTTON_PIN = 35;  // Active LOW example
 constexpr uint32_t HOLD_TIME_MS = 3000;
 
 ESP32WiFiPortal wifiPortal;
@@ -17,6 +27,8 @@ void setup() {
 }
 
 void loop() {
+  wifiPortal.process();
+
   const bool pressed = digitalRead(CONFIG_BUTTON_PIN) == LOW;
 
   if (pressed && pressedAt == 0) {
@@ -30,8 +42,7 @@ void loop() {
 
     // Blocking portal. Change the AP password for production use.
     if (wifiPortal.startConfigPortal("ESP32-Setup", "12345678", 300000)) {
-      Serial.print("Connected to: ");
-      Serial.println(WiFi.SSID());
+      Serial.println("Connected to the selected Wi-Fi network.");
     } else {
       Serial.print("Portal ended: ");
       Serial.println(wifiPortal.lastError());

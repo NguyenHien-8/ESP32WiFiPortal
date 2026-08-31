@@ -1,3 +1,13 @@
+/**
+ * @file ESP32WiFiPortal.h
+ * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
+ * @brief ESP32 Wi-Fi captive portal library header
+ * @version 1.1.1
+ * @date 2026-08-31
+ * 
+ * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
+ */
+
 #pragma once
 
 #include <Arduino.h>
@@ -10,6 +20,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -65,10 +76,38 @@ public:
   bool eraseCredentials(bool disconnect = true);
 
   // Optional tuning.
+  // The one-argument overload uses localIP as the gateway and a /24 subnet.
+  // Portal addressing can only be changed while the portal is stopped.
+  bool setPortalIP(const IPAddress& localIP);
+  bool setPortalIP(const IPAddress& localIP,
+                   const IPAddress& gateway,
+                   const IPAddress& subnet);
+
+  // Optional static IPv4 configuration for the STA interface. DHCP remains
+  // the default and can be restored with useSTADHCP(). Changes apply to the
+  // next library-managed connection attempt.
+  bool setSTAStaticIP(const IPAddress& localIP,
+                      const IPAddress& gateway,
+                      const IPAddress& subnet,
+                      const IPAddress& primaryDNS = IPAddress(),
+                      const IPAddress& secondaryDNS = IPAddress());
+  void useSTADHCP();
+  bool isSTAStaticIPConfigured() const;
+
+  // Library-managed reconnect is processed by process(). The retry count is
+  // the number of retries after the first attempt. Transient reconnects enter
+  // a capped cooldown after a retry burst; authentication failures stop.
+  void setAutoReconnect(bool enabled);
+  bool autoReconnectEnabled() const;
+  bool setConnectionRetryPolicy(uint8_t retryCount,
+                                uint32_t retryIntervalMs,
+                                uint32_t maxRetryIntervalMs);
+
   void setHostname(const char* hostname);
   void setConnectTimeout(uint32_t timeoutMs);
   void setAPChannel(uint8_t channel);
   void setAPHidden(bool hidden);
+  void setLogging(bool enabled);
 
   // Event callbacks.
   void onPortalStarted(Callback callback);
@@ -78,13 +117,24 @@ public:
   IPAddress portalIP() const;
   String portalSSID() const;
   String lastError() const;
+  uint8_t lastDisconnectReason() const;
 
 private:
+  enum class ConnectionOwner : uint8_t {
+    None,
+    Blocking,
+    Portal,
+    Reconnect
+  };
+
   static constexpr uint16_t kDnsPort = 53;
   static constexpr uint16_t kHttpPort = 80;
   static constexpr const char* kPrefsNamespace = "ewp_wifi";
   static constexpr const char* kPrefsSSID = "ssid";
   static constexpr const char* kPrefsPassword = "pass";
+  static constexpr uint32_t kEventSTAConnected = 1UL << 0;
+  static constexpr uint32_t kEventSTAGotIP = 1UL << 1;
+  static constexpr uint32_t kEventSTADisconnected = 1UL << 2;
 
   bool openPortal(const char* apSSID, const char* apPassword, uint32_t portalTimeoutMs);
   void configureRoutes();
@@ -95,33 +145,79 @@ private:
   void handleNotFound();
   void handleCaptiveProbe();
   void beginPendingConnection();
+  void clearPendingConnection(bool disconnectSTA);
+  void failPendingConnection(bool terminalFailure);
 
   bool connect(const String& ssid, const String& password, uint32_t timeoutMs);
+  bool beginSTAConnection(const String& ssid,
+                          const String& password,
+                          ConnectionOwner owner);
+  bool applySTAConfig();
+  void cancelSTAConnection();
+  void ensureWiFiEventHandler();
+  void processWiFiEvents();
+  void processAutoReconnect();
+  void scheduleAutoReconnect(uint32_t delayMs);
+  void cancelAutoReconnect(bool disconnectSTA);
+  uint32_t retryDelay(uint8_t retryNumber) const;
   bool saveCredentials(const String& ssid, const String& password);
   bool loadCredentials(String& ssid, String& password);
   bool validAPPassword(const char* password) const;
   bool portalTimedOut() const;
+  bool isTerminalDisconnectReason(uint8_t reason) const;
   void setError(const String& message);
   void invoke(const Callback& callback);
+  void log(const __FlashStringHelper* message) const;
+  void logDisconnect(uint8_t reason) const;
 
   std::unique_ptr<WebServer> _server;
   DNSServer _dns;
 
   State _state = State::Idle;
+  ConnectionOwner _connectionOwner = ConnectionOwner::None;
   bool _portalActive = false;
-  bool _blockingPortal = false;
   bool _connectPending = false;
   bool _connectAttemptActive = false;
-  bool _routesConfigured = false;
+  bool _attemptTerminalFailure = false;
 
   uint32_t _connectTimeoutMs = 15000;
   uint32_t _portalTimeoutMs = 0;
   uint32_t _portalStartedAt = 0;
   uint32_t _connectPendingAt = 0;
   uint32_t _connectAttemptAt = 0;
+  uint32_t _connectPendingDelayMs = 350;
+
+  uint8_t _maxConnectionRetries = 0;
+  uint8_t _portalRetriesUsed = 0;
+  uint32_t _retryIntervalMs = 1000;
+  uint32_t _maxRetryIntervalMs = 60000;
+
+  bool _autoReconnectEnabled = true;
+  bool _reconnectScheduled = false;
+  uint8_t _reconnectRetriesUsed = 0;
+  uint32_t _reconnectScheduledAt = 0;
+  uint32_t _reconnectDelayMs = 0;
 
   uint8_t _apChannel = 1;
   bool _apHidden = false;
+  bool _loggingEnabled = true;
+
+  IPAddress _portalIP;
+  IPAddress _portalGateway;
+  IPAddress _portalSubnet;
+
+  bool _staStaticIPEnabled = false;
+  IPAddress _staIP;
+  IPAddress _staGateway;
+  IPAddress _staSubnet;
+  IPAddress _staPrimaryDNS;
+  IPAddress _staSecondaryDNS;
+
+  wifi_event_id_t _wifiEventHandlerId = 0;
+  bool _coreAutoReconnectWasEnabled = false;
+  std::atomic<uint32_t> _wifiEventBits{0};
+  std::atomic<uint32_t> _eventDisconnectReason{0};
+  uint8_t _lastDisconnectReason = 0;
 
   String _hostname;
   String _portalSSID;

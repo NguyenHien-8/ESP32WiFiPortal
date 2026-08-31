@@ -1,8 +1,8 @@
 {
   "name": "ESP32WiFiPortal",
-  "version": "1.1.0",
-  "description": "ESP32 Wi-Fi captive portal and credential manager.",
-  "keywords": ["esp32", "wifi", "captive-portal", "provisioning", "nvs"],
+  "version": "1.1.1",
+  "description": "ESP32 Wi-Fi captive portal, static STA networking, reconnect, and credential manager.",
+  "keywords": ["esp32", "wifi", "captive-portal", "provisioning", "reconnect", "nvs"],
   "repository": {
     "type": "git",
     "url": "https://github.com/NguyenHien-8/ESP32WiFiPortal.git"
