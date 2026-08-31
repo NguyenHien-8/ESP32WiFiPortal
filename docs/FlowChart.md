@@ -179,3 +179,85 @@ flowchart LR
 
 `eraseCredentials()` là thao tác xóa duy nhất do API công khai yêu cầu. Connect
 timeout, Portal timeout và `stopConfigPortal()` không xóa credential đã lưu.
+
+## Luồng hoạt động thư viện ESP32WiFiPortal
+
+```
+KHỞI ĐỘNG
+    ↓
+Đọc credential từ NVS → cache RAM
+    ↓
+Thử STA connection
+    │
+    ├──────── Thành công
+    │             ↓
+    │         Connected
+    │             ↓
+    │      Theo dõi WiFi Event
+    │             ↓
+    │        WiFi Disconnect
+    │             ↓
+    │      Schedule Auto Reconnect
+    │             ↓
+    │          WIFI_STA
+    │             ↓
+    │       Reconnect WiFi cũ
+    │          │
+    │          ├── Success
+    │          │      ↓
+    │          │  Connected
+    │          │
+    │          └── Fail
+    │                 ↓
+    │            Retry/Backoff
+    │                 ↓
+    │            Hết retry burst
+    │                 ↓
+    │              Cooldown
+    │                 ↓
+    │          Reconnect WiFi cũ
+    │                 ↓
+    │                ...
+    │
+    └──────── Thất bại lúc startup
+                  ↓
+             Config Portal
+                  ↓
+              WIFI_AP_STA
+                  ↓
+          DNS + WebServer + SoftAP
+                  ↓
+              Scan WiFi
+                  ↓
+          User nhập credential mới
+                  ↓
+             Thử kết nối
+              │
+              ├── Fail
+              │     ↓
+              │  Giữ Portal
+              │
+              │  Nếu Portal timeout/stop
+              │        ↓
+              │  Credential cũ còn?
+              │        │
+              │    ┌───┴───┐
+              │   Yes      No
+              │    ↓        ↓
+              │ Tắt AP    Idle/Failed
+              │    ↓
+              │ WIFI_STA
+              │    ↓
+              │ Auto Reconnect
+              │ WiFi cũ
+              │
+              └── Success
+                    ↓
+              Lưu NVS
+                    ↓
+              cập nhật cache
+                    ↓
+              Tắt Portal
+                    ↓
+                Connected
+```
