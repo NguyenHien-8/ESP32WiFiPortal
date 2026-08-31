@@ -4,4 +4,16 @@ connectSaved	KEYWORD2
 startConfigPortal	KEYWORD2
 startConfigPortalAsync	KEYWORD2
 process	KEYWORD2
+stopConfigPortal	KEYWORD2
+setPortalIP	KEYWORD2
+portalIP	KEYWORD2
+setSTAStaticIP	KEYWORD2
+useSTADHCP	KEYWORD2
+isSTAStaticIPConfigured	KEYWORD2
+setAutoReconnect	KEYWORD2
+autoReconnectEnabled	KEYWORD2
+setConnectionRetryPolicy	KEYWORD2
+setConnectTimeout	KEYWORD2
+setLogging	KEYWORD2
+lastDisconnectReason	KEYWORD2
 eraseCredentials	KEYWORD2

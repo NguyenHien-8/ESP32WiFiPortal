@@ -1,3 +1,13 @@
+/**
+ * @file NonBlocking.ino
+ * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
+ * @brief Example sketch demonstrating non-blocking Wi-Fi configuration portal using ESP32WiFiPortal library.
+ * @version 1.1.1
+ * @date 2026-08-31
+ * 
+ * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
+ */
+
 #include <ESP32WiFiPortal.h>
 
 ESP32WiFiPortal wifiPortal;
@@ -24,7 +34,7 @@ void setup() {
 }
 
 void loop() {
-  // Required only while using the async/non-blocking portal.
+  // Required for the async portal and library-managed Auto Reconnect.
   wifiPortal.process();
 
   // Your application code can continue running here.

@@ -2,6 +2,7 @@
 .vscode/
 .idea/
 build/
+Release_v1.1.0/
 Release_v1.1.1/
 *.bin
 *.elf
