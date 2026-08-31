@@ -206,8 +206,83 @@ flowchart LR
 `eraseCredentials()` là thao tác xóa duy nhất do API công khai yêu cầu. Connect
 timeout, Portal timeout và `stopConfigPortal()` không xóa credential đã lưu.
 
-## Luồng hoạt động thư viện ESP32WiFiPortal
+## Async Wi-Fi scan
 
+```
+/scan
+ ↓
+Idle
+ ↓
+start async scan
+ ↓
+Scanning
+ ↓
+HTTP 202
+ ↓
+return
+
+process()
+ ↓
+scanComplete()
+ ↓
+Running?
+ ├─ Yes → return
+ └─ No
+      ↓
+   Ready
+
+Browser gọi /scan lại
+ ↓
+build JSON
+ ↓
+scanDelete()
+ ↓
+HTTP 200
+```
+
+## Function process() cooperative non-blocking
+
+```cooperative state machine
+loop()
+  ↓
+process()
+  ↓
+đọc state hiện tại
+  ↓
+thực hiện tối đa bước đang sẵn sàng
+  ↓
+return
+  ↓
+application tiếp tục chạy
+  ↓
+loop tiếp theo
+```
+
+```
+process #1
+↓
+disconnect
+↓
+return
+
+application tiếp tục chạy
+
+process #2...
+↓
+20 ms chưa hết
+↓
+return
+
+process #N
+↓
+20 ms hết
+↓
+WiFi.begin()
+↓
+return
+```
+
+## Luồng hoạt động
 ```
 KHỞI ĐỘNG
     ↓
@@ -287,3 +362,4 @@ Thử STA connection
                     ↓
                 Connected
 ```
+
