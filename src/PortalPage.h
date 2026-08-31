@@ -45,7 +45,7 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 .choose-panel,.password-panel{min-height:48px}.password-panel[hidden],.choose-panel[hidden]{display:none}
 .actions{display:flex;justify-content:flex-end;gap:6px}.btn{min-width:122px;min-height:42px;padding:8px 18px;border:1px solid #b8b8b8;border-radius:4px;background:#fbfbfb;color:#171717;cursor:pointer}
 .btn:hover{background:#fff}.btn.primary{border-color:var(--accent);background:var(--accent);color:#fff}.btn.primary:hover{background:#005a9e}.btn:disabled{border-color:#c8c8c8;background:#c8c8c8;color:#fff;cursor:default}
-.password-label{display:block;margin:0 0 6px;font-size:.92rem}.password-input{width:100%;height:41px;padding:8px 10px;border:1px solid #8b8b8b;border-radius:4px;background:#fff;color:#171717}.password-input:focus{border-color:var(--accent);border-bottom-width:3px;outline:0}
+.password-label{display:block;margin:0 0 6px;font-size:.92rem}.password-field{position:relative;border-radius:4px;overflow:hidden}.password-input{display:block;width:100%;height:41px;padding:8px 46px 8px 10px;border:1px solid #8b8b8b;border-radius:4px;background:#fff;color:#171717}.password-input:focus{border-color:var(--accent);border-bottom-width:3px;outline:0}.password-reveal{position:absolute;top:4px;right:4px;width:34px;height:33px;display:grid;place-items:center;padding:0;border:0;border-radius:6px;background:transparent;color:#555;cursor:pointer;touch-action:none}.password-reveal:hover,.password-reveal.active{background:#f5f5f5;color:var(--accent)}.password-reveal:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.password-reveal svg{width:20px;height:20px;pointer-events:none}
 .password-panel .actions{margin-top:14px}.network.busy .network-details{padding-top:3px}.connecting{display:flex;align-items:center;gap:10px;min-height:40px;color:#444}.spinner{width:19px;height:19px;border:2px solid #b9b9b9;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 .empty{margin:8px 16px;padding:28px 18px;text-align:center;color:#5b5b5b;border:1px solid var(--line);border-radius:6px;background:#fafafa}.empty strong{display:block;margin-bottom:5px;color:#202020}.empty .btn{display:block;margin:16px auto 0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
@@ -72,7 +72,7 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 <script>
 const list=document.getElementById('networkList'),scanStatus=document.getElementById('scanStatus'),refresh=document.getElementById('refresh'),form=document.getElementById('wifiForm'),formSSID=document.getElementById('formSSID'),formPassword=document.getElementById('formPassword');
 const NS='http://www.w3.org/2000/svg';
-let selected=null,scanning=false,submitting=false;
+let selected=null,scanning=false,submitting=false,passwordFieldSequence=0;
 function node(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
 function svgNode(tag,attrs){const e=document.createElementNS(NS,tag);Object.keys(attrs).forEach(k=>e.setAttribute(k,attrs[k]));return e}
 function signalLevel(rssi){return rssi>=-55?4:rssi>=-67?3:rssi>=-75?2:1}
@@ -85,6 +85,7 @@ function signalIcon(rssi,open){
 }
 function collapseCurrent(){
   if(!selected)return;
+  setPasswordVisible(selected,false);
   selected.item.classList.remove('selected');selected.main.setAttribute('aria-expanded','false');
   selected.input.value='';selected=null;
 }
@@ -94,7 +95,8 @@ function selectNetwork(entry){
   setTimeout(()=>entry.item.scrollIntoView({block:'nearest'}),0);
 }
 function showPassword(entry){entry.choose.hidden=true;entry.passwordPanel.hidden=false;entry.input.focus()}
-function cancelPassword(entry){entry.input.value='';entry.next.disabled=true;entry.passwordPanel.hidden=true;entry.choose.hidden=false;entry.main.focus()}
+function setPasswordVisible(entry,visible){entry.input.type=visible?'text':'password';entry.reveal.classList.toggle('active',visible);entry.reveal.setAttribute('aria-pressed',visible?'true':'false')}
+function cancelPassword(entry){setPasswordVisible(entry,false);entry.input.value='';entry.next.disabled=true;entry.passwordPanel.hidden=true;entry.choose.hidden=false;entry.main.focus()}
 function submitNetwork(entry,password){
   if(submitting)return;
   submitting=true;formSSID.value=entry.network.ssid;formPassword.value=password;
@@ -105,12 +107,15 @@ function submitNetwork(entry,password){
   setTimeout(()=>form.submit(),80);
 }
 function makeNetwork(network){
-  const item=node('article','network'),main=node('button','network-main'),copy=node('span','network-copy'),ssid=node('span','ssid',network.ssid),subtitle=node('span','subtitle',network.open?'Open network':'Secured'),details=node('div','network-details'),choose=node('div','choose-panel'),chooseActions=node('div','actions'),connect=node('button','btn primary','Connect'),passwordPanel=node('div','password-panel'),label=node('label','password-label','Enter the password'),input=node('input','password-input'),passwordActions=node('div','actions'),next=node('button','btn primary','Next'),cancel=node('button','btn','Cancel');
+  const item=node('article','network'),main=node('button','network-main'),copy=node('span','network-copy'),ssid=node('span','ssid',network.ssid),subtitle=node('span','subtitle',network.open?'Open network':'Secured'),details=node('div','network-details'),choose=node('div','choose-panel'),chooseActions=node('div','actions'),connect=node('button','btn primary','Connect'),passwordPanel=node('div','password-panel'),label=node('label','password-label','Enter the password'),passwordField=node('div','password-field'),input=node('input','password-input'),reveal=node('button','password-reveal'),passwordActions=node('div','actions'),next=node('button','btn primary','Next'),cancel=node('button','btn','Cancel');
   main.type='button';main.setAttribute('aria-expanded','false');main.title=network.ssid;copy.append(ssid,subtitle);main.append(signalIcon(network.rssi,network.open),copy);item.append(main,details);
   connect.type='button';chooseActions.appendChild(connect);choose.appendChild(chooseActions);details.appendChild(choose);
-  passwordPanel.hidden=true;input.type='password';input.maxLength=63;input.autocomplete='current-password';input.placeholder='Password';label.appendChild(input);next.type='button';next.disabled=true;cancel.type='button';passwordActions.append(next,cancel);passwordPanel.append(label,passwordActions);details.appendChild(passwordPanel);
-  const entry={network,item,main,details,choose,passwordPanel,input,next};
+  passwordPanel.hidden=true;input.type='password';input.id='ewp-password-'+(++passwordFieldSequence);input.maxLength=63;input.autocomplete='current-password';input.placeholder='Password';label.htmlFor=input.id;reveal.type='button';reveal.title='Hold to show password';reveal.setAttribute('aria-label','Hold to show password');reveal.setAttribute('aria-pressed','false');const eye=svgNode('svg',{viewBox:'0 0 24 24','aria-hidden':'true'});eye.appendChild(svgNode('path',{d:'M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z',fill:'none',stroke:'currentColor','stroke-width':'1.7','stroke-linejoin':'round'}));eye.appendChild(svgNode('circle',{cx:'12',cy:'12',r:'2.6',fill:'none',stroke:'currentColor','stroke-width':'1.7'}));reveal.appendChild(eye);passwordField.append(input,reveal);next.type='button';next.disabled=true;cancel.type='button';passwordActions.append(next,cancel);passwordPanel.append(label,passwordField,passwordActions);details.appendChild(passwordPanel);
+  const entry={network,item,main,details,choose,passwordPanel,input,reveal,next};
   main.onclick=()=>selectNetwork(entry);connect.onclick=()=>network.open?submitNetwork(entry,''):showPassword(entry);cancel.onclick=()=>cancelPassword(entry);next.onclick=()=>{if(input.value.length>=8)submitNetwork(entry,input.value)};
+  reveal.onpointerdown=event=>{if(event.button!==0)return;event.preventDefault();setPasswordVisible(entry,true);try{reveal.setPointerCapture(event.pointerId)}catch(error){}};
+  reveal.onpointerup=()=>setPasswordVisible(entry,false);reveal.onpointercancel=()=>setPasswordVisible(entry,false);reveal.onlostpointercapture=()=>setPasswordVisible(entry,false);reveal.onblur=()=>setPasswordVisible(entry,false);
+  reveal.onkeydown=event=>{if((event.key===' '||event.key==='Enter')&&!event.repeat){event.preventDefault();setPasswordVisible(entry,true)}};reveal.onkeyup=event=>{if(event.key===' '||event.key==='Enter'){event.preventDefault();setPasswordVisible(entry,false)}};
   input.oninput=()=>next.disabled=input.value.length<8;input.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();cancelPassword(entry)}else if(e.key==='Enter'&&!next.disabled){e.preventDefault();submitNetwork(entry,input.value)}};
   return item;
 }
