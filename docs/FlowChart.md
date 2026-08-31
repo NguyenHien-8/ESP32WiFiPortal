@@ -39,7 +39,7 @@ flowchart TD
     H -- Có --> J[Áp dụng DHCP hoặc Static STA IP và bắt đầu connection]
     J --> K{Kết nối trước timeout?}
     K -- Có --> L[State = Connected]
-    K -- Không --> M[WiFi.disconnect và State = Failed]
+    K -- Không --> M[WiFi.disconnect, trả false và đặt lịch credential đã lưu]
     I -- Có --> N[Mở Config Portal blocking]
     I -- Không --> O[Trả false cho ứng dụng]
     M --> I
@@ -47,7 +47,9 @@ flowchart TD
 
 `connectSaved()` chỉ đọc namespace `ewp_wifi`; lỗi kết nối không xóa credential
 đã lưu. Nếu một Portal đang hoạt động, thư viện dừng và dọn Portal trước khi
-chuyển sang `WIFI_STA`.
+chuyển sang `WIFI_STA`. Khi Auto Reconnect bật, một lần blocking thất bại vẫn
+đặt lịch thử lại non-blocking; `autoConnect()` sẽ hủy lịch này khi chuyển ngay
+sang Portal nên không có hai owner kết nối.
 
 ## Khởi tạo Config Portal
 
@@ -57,7 +59,7 @@ flowchart TD
     B --> C[Chuyển sang WIFI_AP_STA]
     C --> D[Áp dụng local IP, gateway, subnet bằng softAPConfig]
     D --> E{Cấu hình IP thành công?}
-    E -- Không --> X[Cleanup và State = Failed]
+    E -- Không --> X[Cleanup và phục hồi credential cũ nếu STA đang offline]
     E -- Có --> F[Khởi động SoftAP]
     F --> G{SoftAP thành công?}
     G -- Không --> X
@@ -72,6 +74,28 @@ Portal IP được giữ cố định trong suốt phiên đang chạy. `setPort
 `false` nếu được gọi khi Portal còn active, nhờ đó SoftAP, DNS và HTTP redirect
 luôn dùng cùng một địa chỉ.
 
+## Wi-Fi scan non-blocking trong Portal
+
+```mermaid
+flowchart TD
+    A[GET /scan] --> B{Scan state}
+    B -- Idle --> C[Start scan async]
+    C --> D[HTTP 202 scanning]
+    B -- Scanning --> E{scanComplete}
+    E -- Running --> D
+    E -- Ready --> F[State = Ready]
+    E -- Failed hoặc timeout --> G[HTTP 503 và cleanup]
+    D --> H[Browser chờ 400 ms rồi poll lại]
+    H --> A
+    B -- Ready --> I[Build JSON từ kết quả]
+    F --> I
+    I --> J[scanDelete, HTTP 200]
+```
+
+Scan driver chạy asynchronous nên mỗi lần `process()` chỉ poll trạng thái rồi
+tiếp tục phục vụ DNS, HTTP và state machine. Portal stop hoặc một yêu cầu kết nối
+hợp lệ sẽ hủy scan đang chạy và giải phóng kết quả; không có hai scan đồng thời.
+
 ## Nhận và thử credential mới
 
 ```mermaid
@@ -82,12 +106,15 @@ flowchart TD
     D -- Có --> E[HTTP 409]
     D -- Không --> F[Giữ credential mới tạm thời trong RAM]
     F --> G[Trả trang Connecting]
-    G --> H[process gọi WiFi.begin sau khoảng trễ ngắn]
-    H --> I{STA đã connected?}
+    G --> H[Phase Disconnect STA nếu cần]
+    H --> U[Phase Settling bằng millis]
+    U --> V[Phase apply STA config]
+    V --> W[Phase WiFi.begin]
+    W --> I{STA đã connected?}
     I -- Chưa --> J{Đã quá connect timeout?}
     J -- Chưa --> I
-    J -- Có --> K{Lỗi authentication?}
-    K -- Có --> L[Hủy attempt, không retry, giữ Portal]
+    J -- Có --> K{Credential mới bị từ chối rõ ràng?}
+    K -- Có --> L[Hủy attempt, không lưu NVS, giữ Portal]
     K -- Không --> R{Còn retry đã cấu hình?}
     R -- Có --> S[Đặt lịch retry bằng millis và backoff]
     S --> H
@@ -100,7 +127,9 @@ flowchart TD
 ```
 
 Credential cũ trong NVS không bị thay đổi khi candidate không kết nối được hoặc
-khi Portal hết thời gian. Việc ghi chỉ diễn ra sau khi `WL_CONNECTED`.
+khi Portal hết thời gian. Việc ghi chỉ diễn ra sau khi `WL_CONNECTED`. Handshake
+timeout không tự động chứng minh password sai vì cũng có thể do sóng yếu hoặc AP
+đang restart.
 
 ## Wi-Fi event và Auto Reconnect
 
@@ -117,10 +146,9 @@ flowchart TD
     H --> I[Log ngắn và cập nhật state]
     I --> J{Disconnect khi hoạt động bình thường?}
     J -- Không --> K[Để owner hiện tại xử lý attempt]
-    J -- Có --> L{Authentication hoặc handshake failure?}
-    L -- Có --> M[State = Failed, không Auto Reconnect]
-    L -- Không --> N[Đặt lịch Reconnect sau retry interval]
-    N --> O[Thử hữu hạn với exponential backoff]
+    J -- Có --> N[Đặt lịch Reconnect sau retry interval]
+    N --> S[Disconnect nếu cần, Settling, Config, WiFi.begin]
+    S --> O[Thử hữu hạn với exponential backoff]
     O --> P{Kết nối được?}
     P -- Có --> Q[State = Connected, reset retry]
     P -- Không --> R[Cooldown bằng max retry interval]
@@ -129,14 +157,17 @@ flowchart TD
 
 Arduino-ESP32 Auto Reconnect được tắt khi event handler của thư viện được cài.
 Nhờ đó chỉ có state machine này gọi `WiFi.begin()` và hủy attempt. Lỗi mất AP là
-tạm thời nên sau cooldown thiết bị vẫn có thể phục hồi; lỗi password dừng hẳn.
-Callback không gọi Serial, DNS, WebServer, Preferences hoặc API Wi-Fi blocking.
+tạm thời nên sau cooldown thiết bị vẫn có thể phục hồi. Với credential đã lưu,
+`AUTH_FAIL` và handshake timeout cũng tiếp tục theo cooldown vì các reason này
+có thể xuất hiện do packet loss, AP quá tải hoặc router restart. Nếu password
+thực sự đã đổi, cooldown giới hạn tần suất thử và tránh reconnect storm. Callback
+không gọi Serial, DNS, WebServer, Preferences hoặc API Wi-Fi blocking.
 
 ## Timeout, stop và restart Portal
 
 ```mermaid
 flowchart TD
-    A[Portal timeout, stop, restart hoặc destructor] --> B[Đánh dấu Portal inactive]
+    A[Portal timeout hoặc stop] --> B[Đánh dấu Portal inactive]
     B --> C{Candidate đã gọi WiFi.begin?}
     C -- Có --> D[WiFi.disconnect false, false]
     C -- Không --> E[Không ngắt STA độc lập]
@@ -145,17 +176,20 @@ flowchart TD
     F --> G[Xóa timestamp, SSID và password tạm]
     G --> H[Dừng WebServer và DNS]
     H --> I[Tắt SoftAP]
-    I --> J{Nguyên nhân là Portal timeout?}
-    J -- Có --> K{Có candidate active lúc timeout?}
-    K -- Có --> M[State = Failed]
-    K -- Không --> L[State = Connected nếu STA cũ còn kết nối, ngược lại Failed]
-    J -- Không --> N[State = Connected hoặc Idle theo trạng thái STA]
+    I --> J{STA vẫn connected?}
+    J -- Có --> K[State = Connected]
+    J -- Không --> L{Auto Reconnect bật và có credential cũ?}
+    L -- Có --> M[Đặt lịch credential cũ, State = Connecting]
+    L -- Không --> N[Timeout: Failed; stop chủ động: Idle]
 ```
 
 Trong blocking mode, vòng lặp kết thúc ngay khi `_portalActive` thành `false`.
 Trong non-blocking mode, ứng dụng phải gọi `process()` thường xuyên. Vì cả hai
 đều dùng cùng state machine, hành vi timeout và cleanup là nhất quán, không còn
-STA attempt tiếp tục chạy nền sau khi state đã chuyển sang thất bại.
+STA candidate tiếp tục chạy nền. Nếu credential cũ hợp lệ còn trong cache/NVS,
+`process()` phục hồi nó bằng Auto Reconnect non-blocking và không tự mở lại Portal.
+Khi restart Portal, lịch phục hồi tạm thời được hủy trước khi phiên Portal mới bắt
+đầu nên không có hai owner gọi `WiFi.begin()`.
 
 ## Quản lý credential chủ động
 
@@ -171,3 +205,161 @@ flowchart LR
 
 `eraseCredentials()` là thao tác xóa duy nhất do API công khai yêu cầu. Connect
 timeout, Portal timeout và `stopConfigPortal()` không xóa credential đã lưu.
+
+## Async Wi-Fi scan
+
+```
+/scan
+ ↓
+Idle
+ ↓
+start async scan
+ ↓
+Scanning
+ ↓
+HTTP 202
+ ↓
+return
+
+process()
+ ↓
+scanComplete()
+ ↓
+Running?
+ ├─ Yes → return
+ └─ No
+      ↓
+   Ready
+
+Browser gọi /scan lại
+ ↓
+build JSON
+ ↓
+scanDelete()
+ ↓
+HTTP 200
+```
+
+## Function process() cooperative non-blocking
+
+```cooperative state machine
+loop()
+  ↓
+process()
+  ↓
+đọc state hiện tại
+  ↓
+thực hiện tối đa bước đang sẵn sàng
+  ↓
+return
+  ↓
+application tiếp tục chạy
+  ↓
+loop tiếp theo
+```
+
+```
+process #1
+↓
+disconnect
+↓
+return
+
+application tiếp tục chạy
+
+process #2...
+↓
+20 ms chưa hết
+↓
+return
+
+process #N
+↓
+20 ms hết
+↓
+WiFi.begin()
+↓
+return
+```
+
+## Luồng hoạt động
+```
+KHỞI ĐỘNG
+    ↓
+Đọc credential từ NVS → cache RAM
+    ↓
+Thử STA connection
+    │
+    ├──────── Thành công
+    │             ↓
+    │         Connected
+    │             ↓
+    │      Theo dõi WiFi Event
+    │             ↓
+    │        WiFi Disconnect
+    │             ↓
+    │      Schedule Auto Reconnect
+    │             ↓
+    │          WIFI_STA
+    │             ↓
+    │       Reconnect WiFi cũ
+    │          │
+    │          ├── Success
+    │          │      ↓
+    │          │  Connected
+    │          │
+    │          └── Fail
+    │                 ↓
+    │            Retry/Backoff
+    │                 ↓
+    │            Hết retry burst
+    │                 ↓
+    │              Cooldown
+    │                 ↓
+    │          Reconnect WiFi cũ
+    │                 ↓
+    │                ...
+    │
+    └──────── Thất bại lúc startup
+                  ↓
+             Config Portal
+                  ↓
+              WIFI_AP_STA
+                  ↓
+          DNS + WebServer + SoftAP
+                  ↓
+              Scan WiFi
+                  ↓
+          User nhập credential mới
+                  ↓
+             Thử kết nối
+              │
+              ├── Fail
+              │     ↓
+              │  Giữ Portal
+              │
+              │  Nếu Portal timeout/stop
+              │        ↓
+              │  Credential cũ còn?
+              │        │
+              │    ┌───┴───┐
+              │   Yes      No
+              │    ↓        ↓
+              │ Tắt AP    Idle/Failed
+              │    ↓
+              │ WIFI_STA
+              │    ↓
+              │ Auto Reconnect
+              │ WiFi cũ
+              │
+              └── Success
+                    ↓
+              Lưu NVS
+                    ↓
+              cập nhật cache
+                    ↓
+              Tắt Portal
+                    ↓
+                Connected
+```
+

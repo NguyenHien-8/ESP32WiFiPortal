@@ -17,7 +17,8 @@ ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 - Optional static STA IPv4 address, gateway, subnet, and two DNS servers
 - Lightweight `WiFi.onEvent()` tracking with disconnect reasons
 - Library-managed auto reconnect with bounded retry bursts and capped backoff
-- Wi-Fi scanning and Preferences/NVS credential storage
+- Automatic recovery of the last saved Wi-Fi after an unsuccessful Portal session
+- Asynchronous Wi-Fi scanning and Preferences/NVS credential storage
 - Blocking, non-blocking, and on-demand portal modes
 - Safe cancellation of pending STA attempts when the portal stops or times out
 - No third-party runtime dependency
@@ -113,7 +114,11 @@ initial backoff, and its cap. Portal candidates and blocking saved connections
 stop after the configured finite retries. Auto Reconnect also uses finite retry
 bursts, then waits for the capped cooldown before starting another burst so a
 device can recover from a long router outage without creating a reconnect storm.
-Authentication and handshake failures are terminal and do not enter that loop.
+Authentication and handshake failures from previously saved credentials remain
+recoverable because the same ESP32 reason codes can also be caused by weak
+signal, packet loss, an overloaded AP, or a restarting router. A new Portal
+candidate can still be rejected on a clear authentication failure and is never
+saved unless it connects successfully.
 For safety, the initial interval must be at least 250 ms and the cap at least
 1000 ms.
 
@@ -123,10 +128,29 @@ use `setAutoReconnect(false)` to disable it. Call `process()` frequently from
 library disables the Arduino core's own automatic reconnect while it is managing
 Wi-Fi, preventing two independent policies from racing. `lastDisconnectReason()`
 returns the latest ESP32 reason code processed by the state machine.
+If a blocking `connectSaved()` attempt returns `false`, its saved credentials
+are also scheduled for background recovery; a following `autoConnect()` Portal
+start cancels that schedule before taking ownership of the STA interface.
 
 Short Serial logs are enabled by default for Portal, Connect, Got IP, Disconnect,
 Retry, and Reconnect transitions. Passwords are never logged. Use
 `setLogging(false)` when the application needs silent operation.
+
+## Cooperative runtime
+
+`process()` advances STA connection setup in short phases: disconnect, a
+`millis()`-based settle interval, IP configuration, and `WiFi.begin()`. Auto
+Reconnect timeouts, retry backoff, cooldown, and Portal scans also use state and
+timestamps; `/scan` returns HTTP `202` while the ESP32 scan runs and the existing
+Portal page polls until results are ready. DNS, HTTP, Wi-Fi events, and connection
+state therefore continue to be serviced between scan updates.
+
+Cooperative operation still depends on the application calling `process()`
+frequently. Prefer `startConfigPortalAsync()` for runtime configuration, schedule
+application work with `millis()`, and avoid long `delay()` calls or blocking
+HTTP/TLS operations in `loop()`. The existing `connectSaved()`, `autoConnect()`,
+and `startConfigPortal()` APIs intentionally retain their blocking behavior for
+source compatibility.
 
 ## Portal timeout and stop behavior
 
@@ -134,12 +158,16 @@ Both blocking and asynchronous modes use the same state machine. When a portal
 timeout or `stopConfigPortal()` occurs during a new STA connection attempt, the
 library disconnects that attempt, clears pending credentials from RAM, stops the
 HTTP server and DNS, and shuts down only the SoftAP interface. Stored credentials
-are not modified until a new STA connection succeeds.
+are not modified until a new STA connection succeeds. If the device is then
+offline and valid credentials were already stored, it schedules a non-blocking
+Auto Reconnect with those previous credentials. This recovery uses the normal
+retry/cooldown policy and never reopens the Portal automatically.
 
 If the ESP32 was already connected before opening the portal and no replacement
 attempt is running, stopping the portal leaves that STA connection intact. A
 timed-out blocking portal returns `false` when no STA connection remains; async
-code can inspect `state()` and `lastError()` after `process()`.
+code can inspect `state()` and `lastError()` after `process()`. In either mode,
+subsequent calls to `process()` drive any scheduled recovery of the old Wi-Fi.
 
 For deployed devices, prefer an explicit button or other local action before
 opening configuration mode. See `examples/OnDemand`.

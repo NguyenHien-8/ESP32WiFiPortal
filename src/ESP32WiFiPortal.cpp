@@ -11,6 +11,9 @@
 #include "ESP32WiFiPortal.h"
 #include "PortalPage.h"
 
+#include <esp_wifi.h>
+#include <new>
+
 namespace {
 uint32_t ipToUint32(const IPAddress& address) {
   return (static_cast<uint32_t>(address[0]) << 24) |
@@ -70,6 +73,47 @@ bool isValidPortalNetwork(const IPAddress& localIP,
 
 bool isValidDNS(const IPAddress& address) {
   return ipToUint32(address) == 0 || isUsableUnicastIPv4(address);
+}
+
+void appendJsonEscaped(String& output, const String& value) {
+  static const char kHex[] = "0123456789abcdef";
+  for (size_t i = 0; i < value.length(); ++i) {
+    const uint8_t character = static_cast<uint8_t>(value[i]);
+    switch (character) {
+      case '"': output += F("\\\""); break;
+      case '\\': output += F("\\\\"); break;
+      case '\b': output += F("\\b"); break;
+      case '\f': output += F("\\f"); break;
+      case '\n': output += F("\\n"); break;
+      case '\r': output += F("\\r"); break;
+      case '\t': output += F("\\t"); break;
+      default:
+        if (character < 0x20) {
+          output += F("\\u00");
+          output += kHex[character >> 4];
+          output += kHex[character & 0x0F];
+        } else {
+          output += static_cast<char>(character);
+        }
+        break;
+    }
+  }
+}
+
+void appendIPAddress(String& output, const IPAddress& address) {
+  for (uint8_t i = 0; i < 4; ++i) {
+    if (i > 0) output += '.';
+    output += static_cast<unsigned int>(address[i]);
+  }
+}
+
+uint32_t hashSSID(const String& ssid) {
+  uint32_t hash = 2166136261UL;
+  for (size_t i = 0; i < ssid.length(); ++i) {
+    hash ^= static_cast<uint8_t>(ssid[i]);
+    hash *= 16777619UL;
+  }
+  return hash;
 }
 }  // namespace
 
@@ -133,14 +177,21 @@ bool ESP32WiFiPortal::connectSaved(uint32_t timeoutMs) {
     stopConfigPortal();
   }
 
-  String ssid;
-  String password;
-  if (!loadCredentials(ssid, password) || ssid.length() == 0) {
-    setError("No saved Wi-Fi credentials");
-    _state = State::Failed;
+  if (!ensureCredentialCache()) {
+    if (_credentialCacheLoaded) {
+      setError("No saved Wi-Fi credentials");
+      _state = State::Failed;
+    } else {
+      setError("Saved Wi-Fi credentials are temporarily unavailable");
+      _state = State::Failed;
+      scheduleAutoReconnect(_maxRetryIntervalMs);
+    }
     return false;
   }
-  return connect(ssid, password, timeoutMs);
+
+  const bool connected = connect(timeoutMs);
+  if (!connected) scheduleSavedConnectionRecovery();
+  return connected;
 }
 
 bool ESP32WiFiPortal::autoConnect(const char* apSSID,
@@ -188,22 +239,26 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   }
 
   ensureWiFiEventHandler();
-  cancelAutoReconnect(true);
+  // Load the last known-good credentials before a Portal candidate can use
+  // the STA interface. They remain cached until a candidate is proven and
+  // committed, or the application explicitly erases them.
+  ensureCredentialCache();
   stopConfigPortal();
+  cancelAutoReconnect(true);
   _lastError = "";
   _portalSSID = apSSID;
   _portalTimeoutMs = portalTimeoutMs;
   _portalStartedAt = millis();
   _connectPending = false;
-  _connectAttemptActive = false;
-  _connectionOwner = ConnectionOwner::None;
+  releaseSTAConnection();
   _portalRetriesUsed = 0;
 
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAPConfig(_portalIP, _portalGateway, _portalSubnet)) {
     WiFi.softAPdisconnect(true);
     setError("Failed to configure captive portal IP");
-    _state = State::Failed;
+    _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Failed;
+    scheduleSavedConnectionRecovery();
     return false;
   }
 
@@ -222,9 +277,16 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   if (!apOk) {
     WiFi.softAPdisconnect(true);
     setError("Failed to start ESP32 access point");
-    _state = State::Failed;
+    _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Failed;
+    scheduleSavedConnectionRecovery();
     return false;
   }
+
+  _redirectURL.remove(0);
+  _redirectURL.reserve(24);
+  _redirectURL += F("http://");
+  appendIPAddress(_redirectURL, WiFi.softAPIP());
+  _redirectURL += '/';
 
   _portalActive = true;
   _server.reset(new WebServer(kHttpPort));
@@ -235,7 +297,9 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   if (!_dns.start(kDnsPort, "*", WiFi.softAPIP())) {
     setError("Failed to start captive portal DNS");
     stopConfigPortal();
-    _state = State::Failed;
+    if (_state != State::Connected && _state != State::Connecting) {
+      _state = State::Failed;
+    }
     return false;
   }
 
@@ -274,82 +338,185 @@ void ESP32WiFiPortal::handleRoot() {
   _server->send_P(200, "text/html; charset=utf-8", EWP_PORTAL_HTML);
 }
 
-void ESP32WiFiPortal::handleScan() {
-  if (!_server) return;
+void ESP32WiFiPortal::processScan() {
+  if (_scanState != ScanState::Scanning) return;
 
-  int count = WiFi.scanNetworks(false, true);
-  if (count < 0) {
-    WiFi.scanDelete();
-    _server->sendHeader("Cache-Control", "no-store");
-    _server->send(503, "application/json; charset=utf-8",
-                  "{\"networks\":[],\"error\":\"Wi-Fi scan failed\"}");
+  const int16_t result = WiFi.scanComplete();
+  if (result == WIFI_SCAN_RUNNING &&
+      millis() - _scanStartedAt < kScanTimeoutMs) {
     return;
   }
 
-  String json;
-  json.reserve(96 + static_cast<size_t>(count) * 80);
-  json = F("{\"networks\":[");
+  if (result >= 0) {
+    _scanResultCount = result;
+    _scanState = ScanState::Ready;
+    return;
+  }
+
+  // The Arduino core normally times out first. This explicit upper bound also
+  // prevents an unusual driver state from leaving the Portal stuck polling.
+  if (result == WIFI_SCAN_RUNNING) esp_wifi_scan_stop();
+  WiFi.scanDelete();
+  _scanResultCount = 0;
+  _scanState = ScanState::Failed;
+}
+
+void ESP32WiFiPortal::resetScan(bool cancelActiveScan) {
+  if (_scanState == ScanState::Idle) return;
+  if (cancelActiveScan && _scanState == ScanState::Scanning) {
+    esp_wifi_scan_stop();
+  }
+  WiFi.scanDelete();
+  _scanState = ScanState::Idle;
+  _scanStartedAt = 0;
+  _scanResultCount = 0;
+}
+
+void ESP32WiFiPortal::handleScan() {
+  if (!_server) return;
+
+  if (_connectPending || _connectAttemptActive) {
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(409, "application/json; charset=utf-8",
+                  "{\"networks\":[],\"error\":\"Wi-Fi connection in progress\"}");
+    return;
+  }
+
+  processScan();
+  if (_scanState == ScanState::Idle) {
+    const int16_t result = WiFi.scanNetworks(true, true);
+    _scanStartedAt = millis();
+    if (result == WIFI_SCAN_RUNNING) {
+      _scanState = ScanState::Scanning;
+    } else if (result >= 0) {
+      _scanResultCount = result;
+      _scanState = ScanState::Ready;
+    } else {
+      WiFi.scanDelete();
+      _scanState = ScanState::Failed;
+    }
+  }
+
+  if (_scanState == ScanState::Scanning) {
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->sendHeader("Retry-After", "1");
+    _server->send(202, "application/json; charset=utf-8",
+                  "{\"scanning\":true}");
+    return;
+  }
+
+  if (_scanState == ScanState::Failed) {
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(503, "application/json; charset=utf-8",
+                  "{\"networks\":[],\"error\":\"Wi-Fi scan failed\"}");
+    resetScan(false);
+    return;
+  }
+
+  const int count = _scanResultCount;
+
+  if (static_cast<size_t>(count) > _scanNetworkIdentityCapacity) {
+    std::unique_ptr<ScanNetworkIdentity[]> identities(
+        new (std::nothrow) ScanNetworkIdentity[count]);
+    if (identities) {
+      _scanNetworkIdentities = std::move(identities);
+      _scanNetworkIdentityCapacity = static_cast<size_t>(count);
+    }
+  }
+
+  const bool hasIdentityBuffer =
+      static_cast<size_t>(count) <= _scanNetworkIdentityCapacity;
+  size_t uniqueCount = 0;
+  bool wroteNetwork = false;
+
+  _responseBuffer.remove(0);
+  _responseBuffer.reserve(96 + static_cast<size_t>(count) * 80);
+  _responseBuffer = F("{\"networks\":[");
+  _scanSSID.reserve(32);
+  _scanCompareSSID.reserve(32);
 
   // Emit unique SSIDs only, strongest first (Arduino scan is normally RSSI sorted).
   for (int i = 0; i < count; ++i) {
-    const String currentSSID = WiFi.SSID(i);
-    if (currentSSID.length() == 0) continue;
+    _scanSSID = WiFi.SSID(i);
+    if (_scanSSID.length() == 0) continue;
 
     bool duplicate = false;
-    for (int j = 0; j < i; ++j) {
-      if (WiFi.SSID(j) == currentSSID) {
-        duplicate = true;
-        break;
+    if (hasIdentityBuffer) {
+      const uint32_t hash = hashSSID(_scanSSID);
+      for (size_t j = 0; j < uniqueCount; ++j) {
+        if (_scanNetworkIdentities[j].hash != hash) continue;
+        _scanCompareSSID = WiFi.SSID(_scanNetworkIdentities[j].index);
+        if (_scanCompareSSID == _scanSSID) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        _scanNetworkIdentities[uniqueCount].hash = hash;
+        _scanNetworkIdentities[uniqueCount].index = i;
+        ++uniqueCount;
+      }
+    } else {
+      // Preserve exact duplicate filtering if the small temporary identity
+      // buffer cannot be allocated.
+      for (int j = 0; j < i; ++j) {
+        _scanCompareSSID = WiFi.SSID(j);
+        if (_scanCompareSSID == _scanSSID) {
+          duplicate = true;
+          break;
+        }
       }
     }
     if (duplicate) continue;
 
-    if (json.length() > strlen("{\"networks\":[")) json += ',';
-
-    String escaped = currentSSID;
-    escaped.replace("\\", "\\\\");
-    escaped.replace("\"", "\\\"");
-    escaped.replace("\n", "\\n");
-    escaped.replace("\r", "\\r");
+    if (wroteNetwork) _responseBuffer += ',';
+    wroteNetwork = true;
 
     const bool open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
-    json += F("{\"ssid\":\"");
-    json += escaped;
-    json += F("\",\"rssi\":");
-    json += WiFi.RSSI(i);
-    json += F(",\"open\":");
-    json += open ? F("true") : F("false");
-    json += '}';
+    _responseBuffer += F("{\"ssid\":\"");
+    appendJsonEscaped(_responseBuffer, _scanSSID);
+    _responseBuffer += F("\",\"rssi\":");
+    _responseBuffer += WiFi.RSSI(i);
+    _responseBuffer += F(",\"open\":");
+    _responseBuffer += open ? F("true") : F("false");
+    _responseBuffer += '}';
   }
 
-  json += F("]}");
-  WiFi.scanDelete();
+  _responseBuffer += F("]}");
+  resetScan(false);
 
   _server->sendHeader("Cache-Control", "no-store");
-  _server->send(200, "application/json; charset=utf-8", json);
+  _server->send(200, "application/json; charset=utf-8", _responseBuffer);
 }
 
 void ESP32WiFiPortal::handleSave() {
   if (!_server) return;
-
-  String ssid = _server->arg("ssid");
-  String password = _server->arg("password");
-  ssid.trim();
-
-  if (ssid.length() == 0 || ssid.length() > 32 || password.length() > 63) {
-    _server->send(400, "text/plain; charset=utf-8", "Invalid SSID or password length");
-    return;
-  }
 
   if (_connectPending || _connectAttemptActive) {
     _server->send(409, "text/plain; charset=utf-8", "A Wi-Fi connection attempt is already running");
     return;
   }
 
-  _pendingSSID = ssid;
-  _pendingPassword = password;
+  // Move request values directly into reusable candidate buffers instead of
+  // creating another pair of short-lived credential Strings.
+  _pendingSSID = _server->arg("ssid");
+  _pendingPassword = _server->arg("password");
+  _pendingSSID.trim();
+
+  if (_pendingSSID.length() == 0 || _pendingSSID.length() > 32 ||
+      _pendingPassword.length() > 63) {
+    _pendingSSID.remove(0);
+    _pendingPassword.remove(0);
+    _server->send(400, "text/plain; charset=utf-8",
+                  "Invalid SSID or password length");
+    return;
+  }
+
+  // A valid connection request takes priority over a scan started by another
+  // Portal client. The normal UI only submits after scan results are ready.
+  resetScan(true);
+
   _connectPending = true;
-  _connectAttemptActive = false;
   _connectPendingAt = millis();
   _connectPendingDelayMs = 350;
   _portalRetriesUsed = 0;
@@ -364,25 +531,26 @@ void ESP32WiFiPortal::handleStatus() {
   const bool candidateInProgress =
       _connectPending ||
       (_connectAttemptActive && _connectionOwner == ConnectionOwner::Portal);
-  String json = F("{\"connected\":");
-  json += isConnected() && !candidateInProgress ? F("true") : F("false");
-  json += F(",\"portal\":");
-  json += isPortalActive() ? F("true") : F("false");
-  json += F(",\"ip\":\"");
-  json += isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
-  json += F("\",\"error\":\"");
-  String escapedError = _lastError;
-  escapedError.replace("\\", "\\\\");
-  escapedError.replace("\"", "\\\"");
-  json += escapedError;
-  json += F("\"}");
+  const bool connected = isConnected();
+  _responseBuffer.remove(0);
+  _responseBuffer.reserve(96 + _lastError.length());
+  _responseBuffer = F("{\"connected\":");
+  _responseBuffer += connected && !candidateInProgress ? F("true") : F("false");
+  _responseBuffer += F(",\"portal\":");
+  _responseBuffer += isPortalActive() ? F("true") : F("false");
+  _responseBuffer += F(",\"ip\":\"");
+  appendIPAddress(_responseBuffer,
+                  connected ? WiFi.localIP() : WiFi.softAPIP());
+  _responseBuffer += F("\",\"error\":\"");
+  appendJsonEscaped(_responseBuffer, _lastError);
+  _responseBuffer += F("\"}");
   _server->sendHeader("Cache-Control", "no-store");
-  _server->send(200, "application/json; charset=utf-8", json);
+  _server->send(200, "application/json; charset=utf-8", _responseBuffer);
 }
 
 void ESP32WiFiPortal::handleCaptiveProbe() {
   if (!_server) return;
-  _server->sendHeader("Location", String("http://") + WiFi.softAPIP().toString() + "/", true);
+  _server->sendHeader("Location", _redirectURL, true);
   _server->send(302, "text/plain", "");
 }
 
@@ -395,27 +563,41 @@ void ESP32WiFiPortal::process() {
   processWiFiEvents();
 
   if (_portalActive) {
+    processScan();
     _dns.processNextRequest();
     if (_server) _server->handleClient();
 
     if (portalTimedOut()) {
-      const bool hadCandidateAttempt =
-          _connectAttemptActive && _connectionOwner == ConnectionOwner::Portal;
       setError("Configuration portal timed out");
       log(F("[EWP] Portal timeout"));
       stopConfigPortal();
-      _state = !hadCandidateAttempt && WiFi.status() == WL_CONNECTED
-                   ? State::Connected
-                   : State::Failed;
+      if (WiFi.status() == WL_CONNECTED) {
+        _state = State::Connected;
+      } else if (_reconnectScheduled ||
+                 (_connectAttemptActive &&
+                  _connectionOwner == ConnectionOwner::Reconnect)) {
+        _state = State::Connecting;
+      } else {
+        _state = State::Failed;
+      }
       return;
     }
 
     if (_connectPending && !_connectAttemptActive &&
         millis() - _connectPendingAt >= _connectPendingDelayMs) {
       beginPendingConnection();
+      return;
     }
 
     if (_connectAttemptActive && _connectionOwner == ConnectionOwner::Portal) {
+      if (!advanceSTAConnection()) {
+        clearPendingConnection(false);
+        _state = State::Portal;
+        return;
+      }
+
+      if (_connectionPhase != ConnectionPhase::Connecting) return;
+
       if (WiFi.status() == WL_CONNECTED) {
         if (!saveCredentials(_pendingSSID, _pendingPassword)) {
           clearPendingConnection(true);
@@ -449,8 +631,7 @@ void ESP32WiFiPortal::beginPendingConnection() {
 
   _connectPending = false;
   _lastError = "";
-  if (!beginSTAConnection(_pendingSSID, _pendingPassword,
-                          ConnectionOwner::Portal)) {
+  if (!beginSTAConnection(ConnectionOwner::Portal)) {
     clearPendingConnection(false);
     _state = State::Portal;
   }
@@ -461,18 +642,18 @@ void ESP32WiFiPortal::clearPendingConnection(bool disconnectSTA) {
   if (disconnectSTA && ownsSTA && _connectAttemptActive) {
     cancelSTAConnection();
   } else if (ownsSTA) {
-    _connectAttemptActive = false;
-    _connectionOwner = ConnectionOwner::None;
-    _connectAttemptAt = 0;
-    _attemptTerminalFailure = false;
+    releaseSTAConnection();
+    _staDisconnected = WiFi.status() != WL_CONNECTED;
   }
 
   _connectPending = false;
   _connectPendingAt = 0;
   _connectPendingDelayMs = 350;
   _portalRetriesUsed = 0;
-  _pendingSSID = String();
-  _pendingPassword = String();
+  // Keep these small buffers for the next Portal attempt to avoid repeatedly
+  // allocating and freeing credential-sized heap blocks.
+  _pendingSSID.remove(0);
+  _pendingPassword.remove(0);
 }
 
 void ESP32WiFiPortal::failPendingConnection(bool terminalFailure) {
@@ -501,9 +682,12 @@ void ESP32WiFiPortal::failPendingConnection(bool terminalFailure) {
                : "Unable to connect. Check the SSID/password and try again.");
 }
 
-bool ESP32WiFiPortal::beginSTAConnection(const String& ssid,
-                                         const String& password,
-                                         ConnectionOwner owner) {
+bool ESP32WiFiPortal::beginSTAConnection(ConnectionOwner owner) {
+  if (_connectAttemptActive || owner == ConnectionOwner::None) {
+    setError("A Wi-Fi connection attempt is already running");
+    return false;
+  }
+
   ensureWiFiEventHandler();
   WiFi.setAutoReconnect(false);
 
@@ -514,20 +698,60 @@ bool ESP32WiFiPortal::beginSTAConnection(const String& ssid,
     if (_portalActive) WiFi.softAPsetHostname(_hostname.c_str());
   }
 
-  WiFi.disconnect(false, false);
-  delay(20);
+  _connectionOwner = owner;
+  _connectionPhase = ConnectionPhase::Settling;
+  _connectAttemptActive = true;
+  _connectAttemptAt = 0;
+  _connectionPhaseAt = millis();
+  _connectionSettleDelayMs = 0;
+  _attemptTerminalFailure = false;
+
+  // cancelSTAConnection() already leaves STA clean. Avoid a second disconnect
+  // before the next retry, but remain conservative for the first attempt or a
+  // currently connected interface.
+  if (!_staDisconnected || WiFi.status() == WL_CONNECTED) {
+    WiFi.disconnect(false, false);
+    _staDisconnected = true;
+    _connectionSettleDelayMs = kSTADisconnectSettleMs;
+  }
+  return true;
+}
+
+bool ESP32WiFiPortal::advanceSTAConnection() {
+  if (!_connectAttemptActive) return false;
+  if (_connectionPhase == ConnectionPhase::Connecting) return true;
+  if (_connectionPhase != ConnectionPhase::Settling) return false;
+  if (millis() - _connectionPhaseAt < _connectionSettleDelayMs) return true;
+
   if (!applySTAConfig()) {
+    cancelSTAConnection();
     setError("Failed to apply STA IP/DNS configuration");
     return false;
   }
 
-  _connectionOwner = owner;
-  _connectAttemptActive = true;
+  const String* ssid = nullptr;
+  const String* password = nullptr;
+  if (_connectionOwner == ConnectionOwner::Portal) {
+    ssid = &_pendingSSID;
+    password = &_pendingPassword;
+  } else if (_connectionOwner == ConnectionOwner::Blocking ||
+             _connectionOwner == ConnectionOwner::Reconnect) {
+    ssid = &_savedSSID;
+    password = &_savedPassword;
+  }
+  if (!ssid || ssid->length() == 0 || !password) {
+    cancelSTAConnection();
+    setError("Wi-Fi credentials are unavailable");
+    return false;
+  }
+
+  _connectionPhase = ConnectionPhase::Connecting;
   _connectAttemptAt = millis();
   _attemptTerminalFailure = false;
   log(F("[EWP] Connect"));
 
-  const wl_status_t result = WiFi.begin(ssid.c_str(), password.c_str());
+  _staDisconnected = false;
+  const wl_status_t result = WiFi.begin(ssid->c_str(), password->c_str());
   if (result == WL_CONNECT_FAILED) {
     cancelSTAConnection();
     setError("Unable to start Wi-Fi connection");
@@ -548,13 +772,26 @@ bool ESP32WiFiPortal::applySTAConfig() {
                      IPAddress(), IPAddress());
 }
 
-void ESP32WiFiPortal::cancelSTAConnection() {
-  const bool wasActive = _connectAttemptActive;
+void ESP32WiFiPortal::releaseSTAConnection() {
   _connectAttemptActive = false;
   _connectionOwner = ConnectionOwner::None;
+  _connectionPhase = ConnectionPhase::Idle;
   _connectAttemptAt = 0;
+  _connectionPhaseAt = 0;
+  _connectionSettleDelayMs = 0;
   _attemptTerminalFailure = false;
-  if (wasActive) WiFi.disconnect(false, false);
+}
+
+void ESP32WiFiPortal::cancelSTAConnection() {
+  const bool disconnectSTA =
+      _connectAttemptActive &&
+      _connectionPhase == ConnectionPhase::Connecting &&
+      !_staDisconnected;
+  releaseSTAConnection();
+  if (disconnectSTA) {
+    WiFi.disconnect(false, false);
+    _staDisconnected = true;
+  }
 }
 
 void ESP32WiFiPortal::processWiFiEvents() {
@@ -565,8 +802,10 @@ void ESP32WiFiPortal::processWiFiEvents() {
   if ((events & kEventSTAConnected) != 0 && _loggingEnabled) {
     Serial.println(F("[EWP] STA connected"));
   }
+  if ((events & kEventSTAConnected) != 0) _staDisconnected = false;
 
   if ((events & kEventSTAGotIP) != 0 && connectedNow) {
+    _staDisconnected = false;
     if (_loggingEnabled) {
       Serial.print(F("[EWP] Got IP: "));
       Serial.println(WiFi.localIP());
@@ -584,22 +823,25 @@ void ESP32WiFiPortal::processWiFiEvents() {
   if (reason == 0) reason = WIFI_REASON_UNSPECIFIED;
   _lastDisconnectReason = reason;
   logDisconnect(reason);
+  if (!_connectAttemptActive && !connectedNow) _staDisconnected = true;
   if (connectedNow || reason == WIFI_REASON_ASSOC_LEAVE) return;
 
   if (_connectAttemptActive) {
-    _attemptTerminalFailure =
-        _attemptTerminalFailure || isTerminalDisconnectReason(reason);
+    // Saved credentials may see AUTH_FAIL during weak signal, AP overload, or
+    // a router restart. Only an unproven Portal/initial blocking candidate is
+    // allowed to treat a clear credential rejection as terminal. Reconnect
+    // always remains recoverable through its bounded cooldown policy.
+    if (_connectionPhase == ConnectionPhase::Connecting &&
+        _connectionOwner != ConnectionOwner::Reconnect) {
+      _attemptTerminalFailure =
+          _attemptTerminalFailure || isCredentialFailureReason(reason);
+    }
     return;
   }
 
   if (_autoReconnectEnabled && !_portalActive && _state == State::Connected) {
-    if (isTerminalDisconnectReason(reason)) {
-      setError("Auto reconnect stopped after an authentication failure");
-      _state = State::Failed;
-    } else {
-      _reconnectRetriesUsed = 0;
-      scheduleAutoReconnect(_retryIntervalMs);
-    }
+    _reconnectRetriesUsed = 0;
+    scheduleAutoReconnect(_retryIntervalMs);
   }
 }
 
@@ -607,25 +849,20 @@ void ESP32WiFiPortal::processAutoReconnect() {
   if (!_autoReconnectEnabled || _portalActive) return;
 
   if (_connectAttemptActive && _connectionOwner == ConnectionOwner::Reconnect) {
+    if (!advanceSTAConnection()) {
+      scheduleNextAutoReconnect();
+      return;
+    }
+    if (_connectionPhase != ConnectionPhase::Connecting) return;
+
     if (WiFi.status() == WL_CONNECTED) {
-      _connectAttemptActive = false;
-      _connectionOwner = ConnectionOwner::None;
-      _connectAttemptAt = 0;
-      _attemptTerminalFailure = false;
+      releaseSTAConnection();
+      _staDisconnected = false;
       _reconnectScheduled = false;
       _reconnectRetriesUsed = 0;
       _lastError = "";
       _state = State::Connected;
       invoke(_onConnected);
-      return;
-    }
-
-    if (_attemptTerminalFailure) {
-      cancelSTAConnection();
-      _reconnectScheduled = false;
-      setError("Auto reconnect stopped after an authentication failure");
-      _state = State::Failed;
-      log(F("[EWP] Reconnect stopped: authentication failure"));
       return;
     }
 
@@ -635,14 +872,7 @@ void ESP32WiFiPortal::processAutoReconnect() {
     }
 
     cancelSTAConnection();
-    if (_reconnectRetriesUsed < _maxConnectionRetries) {
-      ++_reconnectRetriesUsed;
-      scheduleAutoReconnect(retryDelay(_reconnectRetriesUsed));
-    } else {
-      _reconnectRetriesUsed = 0;
-      scheduleAutoReconnect(_maxRetryIntervalMs);
-      log(F("[EWP] Reconnect cooldown"));
-    }
+    scheduleNextAutoReconnect();
     return;
   }
 
@@ -654,16 +884,20 @@ void ESP32WiFiPortal::processAutoReconnect() {
   if (WiFi.status() == WL_CONNECTED) {
     _reconnectScheduled = false;
     _reconnectRetriesUsed = 0;
+    _staDisconnected = false;
     _state = State::Connected;
     return;
   }
 
-  String ssid;
-  String password;
-  if (!loadCredentials(ssid, password) || ssid.length() == 0) {
-    _reconnectScheduled = false;
-    setError("Auto reconnect requires saved Wi-Fi credentials");
-    _state = State::Failed;
+  if (!ensureCredentialCache()) {
+    if (_credentialCacheLoaded) {
+      _reconnectScheduled = false;
+      setError("Auto reconnect requires saved Wi-Fi credentials");
+      _state = State::Failed;
+    } else {
+      setError("Saved Wi-Fi credentials are temporarily unavailable");
+      scheduleAutoReconnect(_maxRetryIntervalMs);
+    }
     return;
   }
 
@@ -680,8 +914,8 @@ void ESP32WiFiPortal::processAutoReconnect() {
   }
 
   _state = State::Connecting;
-  if (!beginSTAConnection(ssid, password, ConnectionOwner::Reconnect)) {
-    _state = State::Failed;
+  if (!beginSTAConnection(ConnectionOwner::Reconnect)) {
+    scheduleNextAutoReconnect();
   }
 }
 
@@ -693,6 +927,34 @@ void ESP32WiFiPortal::scheduleAutoReconnect(uint32_t delayMs) {
   _state = State::Connecting;
 }
 
+void ESP32WiFiPortal::scheduleNextAutoReconnect() {
+  if (_reconnectRetriesUsed < _maxConnectionRetries) {
+    ++_reconnectRetriesUsed;
+    scheduleAutoReconnect(retryDelay(_reconnectRetriesUsed));
+    return;
+  }
+
+  _reconnectRetriesUsed = 0;
+  scheduleAutoReconnect(_maxRetryIntervalMs);
+  log(F("[EWP] Reconnect cooldown"));
+}
+
+bool ESP32WiFiPortal::scheduleSavedConnectionRecovery() {
+  if (!_autoReconnectEnabled || _portalActive || _connectAttemptActive ||
+      WiFi.status() == WL_CONNECTED) {
+    return false;
+  }
+
+  const bool hasCredentials = ensureCredentialCache();
+  if (!hasCredentials && _credentialCacheLoaded) return false;
+
+  _reconnectRetriesUsed = 0;
+  scheduleAutoReconnect(hasCredentials ? _retryIntervalMs
+                                       : _maxRetryIntervalMs);
+  log(F("[EWP] Restoring saved Wi-Fi"));
+  return true;
+}
+
 void ESP32WiFiPortal::cancelAutoReconnect(bool disconnectSTA) {
   _reconnectScheduled = false;
   _reconnectRetriesUsed = 0;
@@ -702,10 +964,8 @@ void ESP32WiFiPortal::cancelAutoReconnect(bool disconnectSTA) {
     if (disconnectSTA) {
       cancelSTAConnection();
     } else {
-      _connectAttemptActive = false;
-      _connectionOwner = ConnectionOwner::None;
-      _connectAttemptAt = 0;
-      _attemptTerminalFailure = false;
+      releaseSTAConnection();
+      _staDisconnected = WiFi.status() != WL_CONNECTED;
     }
   }
 }
@@ -722,10 +982,8 @@ uint32_t ESP32WiFiPortal::retryDelay(uint8_t retryNumber) const {
   return delayMs > _maxRetryIntervalMs ? _maxRetryIntervalMs : delayMs;
 }
 
-bool ESP32WiFiPortal::connect(const String& ssid,
-                              const String& password,
-                              uint32_t timeoutMs) {
-  if (ssid.length() == 0) {
+bool ESP32WiFiPortal::connect(uint32_t timeoutMs) {
+  if (_savedSSID.length() == 0) {
     setError("SSID cannot be empty");
     _state = State::Failed;
     return false;
@@ -742,13 +1000,24 @@ bool ESP32WiFiPortal::connect(const String& ssid,
   uint8_t retriesUsed = 0;
 
   while (true) {
-    if (!beginSTAConnection(ssid, password, ConnectionOwner::Blocking)) {
+    if (!beginSTAConnection(ConnectionOwner::Blocking)) {
       _state = State::Failed;
       return false;
     }
 
-    while (WiFi.status() != WL_CONNECTED) {
+    bool setupFailed = false;
+    while (true) {
       processWiFiEvents();
+      if (!advanceSTAConnection()) {
+        setupFailed = true;
+        break;
+      }
+      if (_connectionPhase != ConnectionPhase::Connecting) {
+        delay(1);
+        yield();
+        continue;
+      }
+      if (WiFi.status() == WL_CONNECTED) break;
       if (_attemptTerminalFailure ||
           (timeoutMs > 0 && millis() - _connectAttemptAt >= timeoutMs)) {
         break;
@@ -757,11 +1026,14 @@ bool ESP32WiFiPortal::connect(const String& ssid,
       yield();
     }
 
+    if (setupFailed) {
+      _state = State::Failed;
+      return false;
+    }
+
     if (WiFi.status() == WL_CONNECTED) {
-      _connectAttemptActive = false;
-      _connectionOwner = ConnectionOwner::None;
-      _connectAttemptAt = 0;
-      _attemptTerminalFailure = false;
+      releaseSTAConnection();
+      _staDisconnected = false;
       _state = State::Connected;
       invoke(_onConnected);
       return true;
@@ -795,8 +1067,6 @@ bool ESP32WiFiPortal::connect(const String& ssid,
 
 void ESP32WiFiPortal::stopConfigPortal() {
   const bool wasPortalActive = _portalActive;
-  const bool hadCandidateAttempt =
-      _connectAttemptActive && _connectionOwner == ConnectionOwner::Portal;
   _portalActive = false;
   clearPendingConnection(true);
 
@@ -805,6 +1075,7 @@ void ESP32WiFiPortal::stopConfigPortal() {
     _server.reset();
   }
   _dns.stop();
+  resetScan(true);
 
   if (wasPortalActive) {
     WiFi.softAPdisconnect(true);
@@ -813,10 +1084,19 @@ void ESP32WiFiPortal::stopConfigPortal() {
 
   _portalTimeoutMs = 0;
   _portalStartedAt = 0;
+  _responseBuffer = String();
+  _scanSSID = String();
+  _scanCompareSSID = String();
+  _redirectURL = String();
+  _scanNetworkIdentities.reset();
+  _scanNetworkIdentityCapacity = 0;
+
   if (_state == State::Portal) {
-    _state = !hadCandidateAttempt && WiFi.status() == WL_CONNECTED
-                 ? State::Connected
-                 : State::Idle;
+    _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Idle;
+  }
+
+  if (wasPortalActive && WiFi.status() != WL_CONNECTED) {
+    scheduleSavedConnectionRecovery();
   }
 }
 
@@ -829,28 +1109,49 @@ bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password
   const size_t ssidWritten = prefs.putString(kPrefsSSID, ssid);
   const size_t passwordWritten = prefs.putString(kPrefsPassword, password);
   prefs.end();
-  return ssidWritten == ssid.length() &&
-         (password.length() == 0 || passwordWritten == password.length());
+  const bool saved = ssidWritten == ssid.length() &&
+                     (password.length() == 0 ||
+                      passwordWritten == password.length());
+  if (saved) {
+    _savedSSID = ssid;
+    _savedPassword = password;
+    _credentialCacheLoaded = true;
+    _credentialCacheValid = true;
+  } else {
+    // A failed multi-key NVS update may be partial. Force the next user of the
+    // cache to re-read storage instead of reconnecting with stale RAM data.
+    _savedSSID.remove(0);
+    _savedPassword.remove(0);
+    _credentialCacheLoaded = false;
+    _credentialCacheValid = false;
+  }
+  return saved;
 }
 
-bool ESP32WiFiPortal::loadCredentials(String& ssid, String& password) {
+bool ESP32WiFiPortal::ensureCredentialCache() {
+  if (_credentialCacheLoaded) return _credentialCacheValid;
+
   Preferences prefs;
   if (!prefs.begin(kPrefsNamespace, true)) return false;
-  ssid = prefs.getString(kPrefsSSID, "");
-  password = prefs.getString(kPrefsPassword, "");
+  String ssid = prefs.getString(kPrefsSSID, "");
+  String password = prefs.getString(kPrefsPassword, "");
   prefs.end();
-  return ssid.length() > 0;
+
+  _savedSSID = std::move(ssid);
+  _savedPassword = std::move(password);
+  _credentialCacheLoaded = true;
+  _credentialCacheValid = _savedSSID.length() > 0 &&
+                          _savedSSID.length() <= 32 &&
+                          _savedPassword.length() <= 63;
+  return _credentialCacheValid;
 }
 
 bool ESP32WiFiPortal::hasSavedCredentials() {
-  String ssid, password;
-  return loadCredentials(ssid, password);
+  return ensureCredentialCache();
 }
 
 String ESP32WiFiPortal::savedSSID() {
-  String ssid, password;
-  loadCredentials(ssid, password);
-  return ssid;
+  return ensureCredentialCache() ? _savedSSID : String();
 }
 
 bool ESP32WiFiPortal::eraseCredentials(bool disconnect) {
@@ -861,6 +1162,13 @@ bool ESP32WiFiPortal::eraseCredentials(bool disconnect) {
   }
   const bool ok = prefs.clear();
   prefs.end();
+
+  if (ok) {
+    _savedSSID.remove(0);
+    _savedPassword.remove(0);
+    _credentialCacheLoaded = true;
+    _credentialCacheValid = false;
+  }
 
   if (disconnect) {
     cancelAutoReconnect(true);
@@ -1052,11 +1360,9 @@ bool ESP32WiFiPortal::portalTimedOut() const {
   return _portalTimeoutMs > 0 && (millis() - _portalStartedAt >= _portalTimeoutMs);
 }
 
-bool ESP32WiFiPortal::isTerminalDisconnectReason(uint8_t reason) const {
+bool ESP32WiFiPortal::isCredentialFailureReason(uint8_t reason) const {
   switch (reason) {
     case WIFI_REASON_AUTH_FAIL:
-    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
-    case WIFI_REASON_HANDSHAKE_TIMEOUT:
     case WIFI_REASON_802_1X_AUTH_FAILED:
       return true;
     default:

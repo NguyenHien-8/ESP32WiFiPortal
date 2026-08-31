@@ -63,6 +63,8 @@ public:
                               const char* apPassword = nullptr,
                               uint32_t portalTimeoutMs = 0);
 
+  // Cooperative runtime service. Call frequently; it never waits for a Wi-Fi
+  // connection, disconnect settle interval, retry delay, or network scan.
   void process();
   void stopConfigPortal();
 
@@ -95,8 +97,8 @@ public:
   bool isSTAStaticIPConfigured() const;
 
   // Library-managed reconnect is processed by process(). The retry count is
-  // the number of retries after the first attempt. Transient reconnects enter
-  // a capped cooldown after a retry burst; authentication failures stop.
+  // the number of retries after the first attempt. Reconnects enter a capped
+  // cooldown after a retry burst, including ambiguous authentication failures.
   void setAutoReconnect(bool enabled);
   bool autoReconnectEnabled() const;
   bool setConnectionRetryPolicy(uint8_t retryCount,
@@ -127,6 +129,24 @@ private:
     Reconnect
   };
 
+  enum class ConnectionPhase : uint8_t {
+    Idle,
+    Settling,
+    Connecting
+  };
+
+  enum class ScanState : uint8_t {
+    Idle,
+    Scanning,
+    Ready,
+    Failed
+  };
+
+  struct ScanNetworkIdentity {
+    uint32_t hash;
+    int index;
+  };
+
   static constexpr uint16_t kDnsPort = 53;
   static constexpr uint16_t kHttpPort = 80;
   static constexpr const char* kPrefsNamespace = "ewp_wifi";
@@ -135,6 +155,8 @@ private:
   static constexpr uint32_t kEventSTAConnected = 1UL << 0;
   static constexpr uint32_t kEventSTAGotIP = 1UL << 1;
   static constexpr uint32_t kEventSTADisconnected = 1UL << 2;
+  static constexpr uint32_t kSTADisconnectSettleMs = 20;
+  static constexpr uint32_t kScanTimeoutMs = 15000;
 
   bool openPortal(const char* apSSID, const char* apPassword, uint32_t portalTimeoutMs);
   void configureRoutes();
@@ -144,27 +166,31 @@ private:
   void handleStatus();
   void handleNotFound();
   void handleCaptiveProbe();
+  void processScan();
+  void resetScan(bool cancelActiveScan);
   void beginPendingConnection();
   void clearPendingConnection(bool disconnectSTA);
   void failPendingConnection(bool terminalFailure);
 
-  bool connect(const String& ssid, const String& password, uint32_t timeoutMs);
-  bool beginSTAConnection(const String& ssid,
-                          const String& password,
-                          ConnectionOwner owner);
+  bool connect(uint32_t timeoutMs);
+  bool beginSTAConnection(ConnectionOwner owner);
+  bool advanceSTAConnection();
   bool applySTAConfig();
+  void releaseSTAConnection();
   void cancelSTAConnection();
   void ensureWiFiEventHandler();
   void processWiFiEvents();
   void processAutoReconnect();
   void scheduleAutoReconnect(uint32_t delayMs);
+  void scheduleNextAutoReconnect();
   void cancelAutoReconnect(bool disconnectSTA);
+  bool scheduleSavedConnectionRecovery();
   uint32_t retryDelay(uint8_t retryNumber) const;
   bool saveCredentials(const String& ssid, const String& password);
-  bool loadCredentials(String& ssid, String& password);
+  bool ensureCredentialCache();
   bool validAPPassword(const char* password) const;
   bool portalTimedOut() const;
-  bool isTerminalDisconnectReason(uint8_t reason) const;
+  bool isCredentialFailureReason(uint8_t reason) const;
   void setError(const String& message);
   void invoke(const Callback& callback);
   void log(const __FlashStringHelper* message) const;
@@ -175,10 +201,12 @@ private:
 
   State _state = State::Idle;
   ConnectionOwner _connectionOwner = ConnectionOwner::None;
+  ConnectionPhase _connectionPhase = ConnectionPhase::Idle;
   bool _portalActive = false;
   bool _connectPending = false;
   bool _connectAttemptActive = false;
   bool _attemptTerminalFailure = false;
+  bool _staDisconnected = false;
 
   uint32_t _connectTimeoutMs = 15000;
   uint32_t _portalTimeoutMs = 0;
@@ -186,6 +214,8 @@ private:
   uint32_t _connectPendingAt = 0;
   uint32_t _connectAttemptAt = 0;
   uint32_t _connectPendingDelayMs = 350;
+  uint32_t _connectionPhaseAt = 0;
+  uint32_t _connectionSettleDelayMs = 0;
 
   uint8_t _maxConnectionRetries = 0;
   uint8_t _portalRetriesUsed = 0;
@@ -223,6 +253,21 @@ private:
   String _portalSSID;
   String _pendingSSID;
   String _pendingPassword;
+  String _savedSSID;
+  String _savedPassword;
+  bool _credentialCacheLoaded = false;
+  bool _credentialCacheValid = false;
+
+  String _responseBuffer;
+  String _scanSSID;
+  String _scanCompareSSID;
+  String _redirectURL;
+  std::unique_ptr<ScanNetworkIdentity[]> _scanNetworkIdentities;
+  size_t _scanNetworkIdentityCapacity = 0;
+  ScanState _scanState = ScanState::Idle;
+  uint32_t _scanStartedAt = 0;
+  int _scanResultCount = 0;
+
   String _lastError;
 
   Callback _onPortalStarted;

@@ -123,7 +123,9 @@ async function scan(){
   if(scanning||submitting)return;
   scanning=true;collapseCurrent();refresh.disabled=true;refresh.classList.add('scanning');scanStatus.textContent='Scanning for networks...';list.replaceChildren();
   try{
-    const response=await fetch('/scan',{cache:'no-store'});if(!response.ok)throw new Error();
+    let response;
+    do{response=await fetch('/scan',{cache:'no-store'});if(response.status===202){await response.text();await new Promise(resolve=>setTimeout(resolve,400))}}while(response.status===202);
+    if(!response.ok)throw new Error();
     const data=await response.json();if(!data||!Array.isArray(data.networks))throw new Error();
     const networks=data.networks.filter(n=>n&&typeof n.ssid==='string'&&n.ssid.length>0).map(n=>({ssid:n.ssid,rssi:Number.isFinite(Number(n.rssi))?Number(n.rssi):-100,open:n.open===true}));
     if(!networks.length){scanStatus.textContent='No networks found';showEmpty('No Wi-Fi networks found','Move closer to the router, then scan again.',true);return}

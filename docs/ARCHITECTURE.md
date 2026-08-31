@@ -12,7 +12,9 @@
 5. The SoftAP receives the configured address, or `192.168.4.1/24` by default.
 6. `DNSServer` resolves all hostnames to the ESP32 SoftAP address.
 7. `WebServer` serves the captive portal and captive-probe redirects.
-8. `/scan` returns nearby Wi-Fi networks as JSON.
+8. `/scan` starts an asynchronous Wi-Fi scan, returns HTTP `202` while it is
+   running, then returns the nearby networks as JSON when polling observes it
+   ready.
 9. `/save` validates credentials and keeps them temporarily in RAM.
 10. `process()` starts and monitors the candidate STA connection while the SoftAP
    remains available.
@@ -27,6 +29,7 @@ All dependencies are included with Espressif's Arduino-ESP32 core:
 - `WebServer.h`
 - `DNSServer.h`
 - `Preferences.h`
+- `esp_wifi.h` (only to stop an in-progress asynchronous scan during cleanup)
 
 No third-party runtime library is required.
 
@@ -47,6 +50,14 @@ are applied with `WiFi.config(...)` immediately before the next managed
 `WiFi.begin()`. `useSTADHCP()` selects a zero-address `WiFi.config(...)` call,
 which restarts the Arduino-ESP32 DHCP client without altering the SoftAP.
 
+For runtime Portal and Auto Reconnect attempts, setup is split into cooperative
+phases. One call disconnects STA when cleanup is needed, later calls observe the
+20 ms settle interval with unsigned `millis()` subtraction, and a ready call
+applies the STA configuration and invokes `WiFi.begin()`. A retry following
+`cancelSTAConnection()` reuses the already-clean STA state and does not issue a
+second redundant disconnect. Blocking startup APIs drive these same phases in
+their compatibility loops.
+
 ## Wi-Fi events and reconnect ownership
 
 The event handler is installed lazily, avoiding static-initialization ordering
@@ -63,7 +74,10 @@ This leaves exactly one owner for connection timing:
 - normal-operation reconnects run in finite bursts with exponential backoff;
 - after a transient burst, a capped cooldown permits recovery from a long router
   outage without a tight retry loop;
-- authentication/handshake reasons are terminal and stop automatic retry;
+- authentication/handshake failures for saved credentials remain recoverable,
+  because those reason codes are ambiguous under weak signal or router restart;
+- clear authentication rejection can still terminate an unproven Portal or
+  initial blocking candidate without changing the credentials in NVS;
 - voluntary `ASSOC_LEAVE` events caused by cleanup never schedule a reconnect.
 
 All elapsed-time tests use unsigned `millis()` subtraction and remain safe across
@@ -75,6 +89,10 @@ timer overflow.
   path around `WiFi.config()`, `WiFi.begin()`, and `WiFi.disconnect()`.
 - At most one library-managed STA attempt can be active.
 - A failed candidate never overwrites credentials in the `ewp_wifi` namespace.
+- Credentials are read into a synchronized object cache once and reused by
+  reconnect attempts; successful saves and erases update that cache.
+- Closing or timing out an unsuccessful Portal schedules the saved credentials
+  through the normal non-blocking reconnect cooldown, without reopening Portal.
 - Connect timeout, portal timeout, explicit stop, restart, and destruction clear
   candidate flags, timestamps, SSID, and password.
 - If a candidate attempt has reached `WiFi.begin()`, cleanup calls
@@ -84,6 +102,23 @@ timer overflow.
 - `connectSaved()` stops an active portal before switching to `WIFI_STA`.
 - `eraseCredentials(true)` coordinates successful NVS erasure with portal cleanup
   and Wi-Fi disconnection, so server and Wi-Fi state cannot diverge.
+
+## Heap behavior on repeated paths
+
+Saved SSID/password values are cached after the first Preferences read, so each
+Auto Reconnect attempt reuses the same buffers instead of reopening NVS and
+constructing short-lived `String` objects. Candidate buffers retain their small
+credential-sized capacity between Portal submissions and are synchronized with
+the cache only after a successful connection and NVS commit.
+
+Portal scan/status JSON shares one reserved response buffer while the Portal is
+active. Scan duplicate detection keeps compact SSID hashes and performs an exact
+SSID comparison on a hash match, avoiding the previous repeated `WiFi.SSID()`
+allocations for every earlier scan result. The driver scan itself is asynchronous;
+`process()` only polls its state, while the browser polls `/scan` after HTTP `202`.
+`WiFi.scanDelete()` still runs before the completed response is sent, and an
+active scan is stopped and cleaned if the Portal closes. All scan-only capacity
+is released when the Portal stops.
 
 ## Design boundaries
 
