@@ -6,7 +6,7 @@ ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
   <img src="docs/image/image1.png" alt="ESP32WiFiPortal interface 1" width="23%">
   <img src="docs/image/image2.png" alt="ESP32WiFiPortal interface 2" width="23%">
   <img src="docs/image/image3.png" alt="ESP32WiFiPortal interface 3" width="23%">
-  <img src="docs/image/image4.png" alt="ESP32WiFiPortal interface 4" width="28%">
+  <img src="docs/image/image4.png" alt="ESP32WiFiPortal interface 4" width="24%">
 </p>
 
 ## Features
