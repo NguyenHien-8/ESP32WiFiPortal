@@ -278,7 +278,13 @@ void ESP32WiFiPortal::handleScan() {
   if (!_server) return;
 
   int count = WiFi.scanNetworks(false, true);
-  if (count < 0) count = 0;
+  if (count < 0) {
+    WiFi.scanDelete();
+    _server->sendHeader("Cache-Control", "no-store");
+    _server->send(503, "application/json; charset=utf-8",
+                  "{\"networks\":[],\"error\":\"Wi-Fi scan failed\"}");
+    return;
+  }
 
   String json;
   json.reserve(96 + static_cast<size_t>(count) * 80);
