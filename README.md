@@ -2,6 +2,13 @@
 
 ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 
+<p align="center">
+  <img src="docs/image/image1.png" alt="ESP32WiFiPortal interface 1" width="23%">
+  <img src="docs/image/image2.png" alt="ESP32WiFiPortal interface 2" width="23%">
+  <img src="docs/image/image3.png" alt="ESP32WiFiPortal interface 3" width="23%">
+  <img src="docs/image/image4.jpg" alt="ESP32WiFiPortal interface 4" width="23%">
+</p>
+
 ## Features
 
 - SoftAP captive portal with DNS redirection
@@ -194,12 +201,16 @@ bool eraseCredentials(bool disconnect = true);
 ```text
 ESP32WiFiPortal/
 ├── src/
+│   ├── ESP32WiFiPortal.cpp
+│   ├── ESP32WiFiPortal.h
+│   └── PortalPage.h
 ├── examples/
 │   ├── Basic/
 │   ├── AdvancedSTA/
 │   ├── CustomIP/
 │   ├── NonBlocking/
-│   └── OnDemand/
+│   ├── OnDemand/
+│   └── Test/
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   └── FlowChart.md
