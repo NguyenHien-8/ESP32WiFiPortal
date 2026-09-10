@@ -76,12 +76,12 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 <section class="advanced-view" id="advancedView" aria-labelledby="advancedTitle" hidden>
 <a class="back-link" id="advancedBack" href="#scan">Back</a>
 <h2 id="advancedTitle">Advanced Wi-Fi Setting</h2>
-<p class="advanced-copy">Enter a hidden or unlisted network exactly as configured.</p>
+<p class="advanced-copy">ESP32 WiFi Portal</p>
 <form class="manual-form" id="manualForm" novalidate>
-<label class="field-label" for="manualSSID"><span>Network name (SSID)</span><input class="text-input" id="manualSSID" name="manual-ssid" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" required><small class="field-help">1-32 bytes; spaces are preserved.</small></label>
-<label class="field-label" for="manualPassword"><span>Password</span><span class="password-field"><input class="password-input" id="manualPassword" name="manual-password" type="password" maxlength="63" autocomplete="current-password" placeholder="Leave empty for an open network"><button class="password-reveal" id="manualReveal" type="button" aria-label="Show password" aria-pressed="false" title="Show password"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/></svg></button></span><small class="field-help">Empty for open Wi-Fi, or 8-63 bytes for a secured network.</small></label>
+<label class="field-label" for="manualSSID"><span>Network name</span><input class="text-input" id="manualSSID" name="manual-ssid" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
+<label class="field-label" for="manualPassword"><span>Password</span><span class="password-field"><input class="password-input" id="manualPassword" name="manual-password" type="password" maxlength="63" autocomplete="current-password" placeholder="Leave empty for an open network"><button class="password-reveal" id="manualReveal" type="button" aria-label="Show password" aria-pressed="false" title="Show password"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/></svg></button></span></label>
 <p class="manual-error" id="manualError" role="alert" aria-live="polite"></p>
-<div class="actions"><button class="btn primary" id="manualConnect" type="submit">Connect and save</button></div>
+<div class="actions"><button class="btn primary" id="manualConnect" type="submit">Connect</button></div>
 </form>
 </section>
 <form id="wifiForm" method="post" action="/save" hidden>
