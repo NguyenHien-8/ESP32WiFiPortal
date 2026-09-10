@@ -19,6 +19,13 @@ void setup() {
   // legacy Class A/B/C ranges are accepted; 10.10.0.1, 150.10.20.1, and
   // 200.5.29.8 are examples. The one-argument overload uses the same address
   // as gateway and a /24 subnet.
+  // ---------------------------------------------------------
+  // Configure Captive Portal IP
+  // Portal IP : 200.5.29.8
+  // Gateway   : 200.5.29.8
+  // Subnet    : 255.255.255.0 (/24)
+  //
+  // ---------------------------------------------------------
   if (!wifiPortal.setPortalIP(IPAddress(200, 5, 29, 8))) {
     Serial.println(wifiPortal.lastError());
     return;
