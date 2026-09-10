@@ -24,21 +24,23 @@ static const char EWP_PORTAL_HTML[] PROGMEM = R"EWPHTML(
 <style>
 :root{font-family:"Segoe UI",system-ui,-apple-system,sans-serif;color:#1b1b1b;color-scheme:light;--accent:#0067c0;--panel:#f3f3f3;--selected:#e6e6e6;--line:#d1d1d1}
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:linear-gradient(135deg,#eef4f8,#f8f8f8 48%,#eef3f5);display:grid;place-items:center}
+body{margin:0;min-height:100vh;padding:24px;background:linear-gradient(135deg,#eef4f8,#f8f8f8 48%,#eef3f5);display:grid;place-items:center}
 button,input{font:inherit}
 button{touch-action:manipulation}
-.shell{width:min(100%,460px);min-height:min(680px,100vh);background:#f3f3f3f7;box-shadow:0 18px 55px #0002;overflow:hidden}
-.top{display:flex;align-items:center;justify-content:space-between;padding:22px 20px 12px}
+.shell{width:min(100%,560px);min-height:min(720px,calc(100vh - 48px));border-radius:12px;background:#f3f3f3f7;box-shadow:0 18px 55px #0002;overflow:hidden}
+.top{position:relative;display:flex;align-items:center;justify-content:space-between;padding:24px 24px 16px}
 h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5b;font-size:.88rem}
 .icon-btn{width:44px;height:44px;display:grid;place-items:center;border:0;border-radius:4px;background:transparent;color:#202020;cursor:pointer}
 .icon-btn:hover{background:#e5e5e5}.icon-btn:focus-visible,.network-main:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.icon-btn svg{width:20px;height:20px}.icon-btn.scanning svg{animation:spin .8s linear infinite}.icon-btn:disabled{opacity:.45;cursor:default}
-.scan-status{min-height:34px;padding:0 20px 10px;color:#5b5b5b;font-size:.88rem}
-.network-list{padding:0 4px 16px}
+.icon-btn svg{width:20px;height:20px}.icon-btn:disabled{opacity:.45;cursor:default}
+.scan-progress{position:absolute;right:80px;bottom:0;left:24px;height:3px;overflow:hidden;border-radius:999px;background:rgba(0,103,192,.16);opacity:0;visibility:hidden;transition:opacity .15s ease}
+.scan-progress.active{opacity:1;visibility:visible}.scan-progress:before{content:"";position:absolute;top:0;bottom:0;left:0;width:44%;border-radius:inherit;background:linear-gradient(90deg,transparent,var(--accent) 18%,var(--accent) 82%,transparent);transform:translate3d(-65%,0,0) scaleX(.25)}.scan-progress.active:before{will-change:transform;animation:scan-progress 1.8s cubic-bezier(.4,0,.2,1) infinite}
+.scan-status{min-height:38px;padding:7px 24px 10px;color:#5b5b5b;font-size:.9rem}
+.network-list{padding:0 8px 20px}
 .network{position:relative;border-radius:5px;overflow:hidden}
 .network+.network{margin-top:2px}.network:hover{background:#eaeaea}.network.selected{background:var(--selected)}
 .network.selected:before{content:"";position:absolute;left:0;top:20px;bottom:20px;width:4px;border-radius:3px;background:var(--accent)}
-.network-main{width:100%;min-height:72px;padding:13px 17px;display:grid;grid-template-columns:38px minmax(0,1fr);gap:10px;align-items:center;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.network-main{width:100%;min-height:76px;padding:15px 20px;display:grid;grid-template-columns:38px minmax(0,1fr);gap:10px;align-items:center;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}
 .network-copy{min-width:0}.ssid{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1rem}.subtitle{display:none;margin-top:2px;color:#5b5b5b;font-size:.91rem}.network.selected .subtitle{display:block}
 .signal{width:30px;height:30px;overflow:visible;color:#202020}.signal .wave{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;opacity:.17}.signal .dot{fill:currentColor}.signal.l2 .inner,.signal.l3 .inner,.signal.l3 .middle,.signal.l4 .inner,.signal.l4 .middle,.signal.l4 .outer{opacity:1}.signal .lock{fill:currentColor;stroke:none}.signal .lock-loop{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round}
 .network-details{display:none;padding:0 15px 14px 65px}.network.selected .network-details{display:block}
@@ -50,8 +52,10 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 .empty{margin:8px 16px;padding:28px 18px;text-align:center;color:#5b5b5b;border:1px solid var(--line);border-radius:6px;background:#fafafa}.empty strong{display:block;margin-bottom:5px;color:#202020}.empty .btn{display:block;margin:16px auto 0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 @keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:480px){body{display:block;background:var(--panel)}.shell{min-height:100vh;box-shadow:none}.top{padding-top:18px}.network-details{padding-left:55px}.actions{display:grid;grid-template-columns:1fr 1fr}.choose-panel .actions{display:flex}.btn{min-width:0;width:100%}}
-@media(prefers-reduced-motion:reduce){.spinner,.icon-btn.scanning svg{animation:none}}
+@keyframes scan-progress{0%{transform:translate3d(-65%,0,0) scaleX(.25)}50%{transform:translate3d(64%,0,0) scaleX(1.3)}100%{transform:translate3d(190%,0,0) scaleX(.25)}}
+@media(min-width:768px){h1{font-size:1.65rem}.brand{font-size:.92rem}.ssid{font-size:1.03rem}}
+@media(max-width:480px){body{display:block;padding:0;background:var(--panel)}.shell{width:100%;min-height:100vh;border-radius:0;box-shadow:none}.top{padding:18px 16px 14px}.scan-progress{right:68px;left:16px}.scan-status{min-height:36px;padding:6px 16px 10px}.network-list{padding:0 4px 16px}.network-main{min-height:70px;padding:12px 13px;grid-template-columns:34px minmax(0,1fr);gap:8px}.signal{width:28px;height:28px}.network-details{padding-left:55px}.actions{display:grid;grid-template-columns:1fr 1fr}.choose-panel .actions{display:flex}.btn{min-width:0;width:100%}}
+@media(prefers-reduced-motion:reduce){.spinner{animation:none}.scan-progress.active:before{animation:none;transform:translate3d(64%,0,0) scaleX(1.1)}}
 </style>
 </head>
 <body>
@@ -59,8 +63,9 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 <header class="top">
 <div><h1>Wi-Fi</h1><p class="brand">ESP32 WiFi Portal</p></div>
 <button class="icon-btn" id="refresh" type="button" aria-label="Scan for Wi-Fi networks" title="Refresh networks">
-<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8a7.5 7.5 0 1 0 .4 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="m16 4 3 4-4.8.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.66 6.34A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.16.68 4.24 1.76L13 11h8V3l-3.34 3.34Z"/></svg>
 </button>
+<div class="scan-progress" id="scanProgress" role="progressbar" aria-label="Scanning for Wi-Fi networks" aria-hidden="true"></div>
 </header>
 <div class="scan-status" id="scanStatus" role="status" aria-live="polite">Scanning for networks...</div>
 <section class="network-list" id="networkList" aria-label="Available Wi-Fi networks"></section>
@@ -70,7 +75,7 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 </form>
 </main>
 <script>
-const list=document.getElementById('networkList'),scanStatus=document.getElementById('scanStatus'),refresh=document.getElementById('refresh'),form=document.getElementById('wifiForm'),formSSID=document.getElementById('formSSID'),formPassword=document.getElementById('formPassword');
+const list=document.getElementById('networkList'),scanStatus=document.getElementById('scanStatus'),scanProgress=document.getElementById('scanProgress'),refresh=document.getElementById('refresh'),form=document.getElementById('wifiForm'),formSSID=document.getElementById('formSSID'),formPassword=document.getElementById('formPassword');
 const NS='http://www.w3.org/2000/svg';
 let selected=null,scanning=false,submitting=false,passwordFieldSequence=0;
 function node(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e}
@@ -126,7 +131,7 @@ function showEmpty(title,message,retry){
 }
 async function scan(){
   if(scanning||submitting)return;
-  scanning=true;collapseCurrent();refresh.disabled=true;refresh.classList.add('scanning');scanStatus.textContent='Scanning for networks...';list.replaceChildren();
+  scanning=true;collapseCurrent();refresh.disabled=true;scanProgress.classList.add('active');scanProgress.setAttribute('aria-hidden','false');scanStatus.textContent='Scanning for networks...';list.replaceChildren();
   try{
     let response;
     do{response=await fetch('/scan',{cache:'no-store'});if(response.status===202){await response.text();await new Promise(resolve=>setTimeout(resolve,400))}}while(response.status===202);
@@ -136,7 +141,7 @@ async function scan(){
     if(!networks.length){scanStatus.textContent='No networks found';showEmpty('No Wi-Fi networks found','Move closer to the router, then scan again.',true);return}
     const fragment=document.createDocumentFragment();networks.forEach(n=>fragment.appendChild(makeNetwork(n)));list.replaceChildren(fragment);scanStatus.textContent=networks.length+' network'+(networks.length===1?'':'s')+' found';
   }catch(e){scanStatus.textContent='Scan failed';showEmpty('Unable to scan','Check the ESP32 setup connection and try again.',true)}
-  finally{scanning=false;refresh.disabled=false;refresh.classList.remove('scanning')}
+  finally{scanning=false;refresh.disabled=false;scanProgress.classList.remove('active');scanProgress.setAttribute('aria-hidden','true')}
 }
 refresh.onclick=scan;
 scan();

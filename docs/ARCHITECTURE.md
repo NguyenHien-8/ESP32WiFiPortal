@@ -36,10 +36,26 @@ No third-party runtime library is required.
 ## Portal addressing
 
 `setPortalIP(...)` validates the complete IPv4 network before changing the stored
-configuration. The local address and gateway must be usable RFC 1918 host
-addresses in the same contiguous subnet. The active portal configuration is
-immutable until `stopConfigPortal()` completes, preventing DNS, redirects, and
-the SoftAP from disagreeing about the address.
+configuration. The local address and gateway may be any usable unicast IPv4 host
+in the legacy Class A/B/C ranges; they are no longer restricted to RFC 1918.
+Zero, `0.x.x.x`, loopback, multicast/reserved, network, and broadcast addresses
+are rejected, and both hosts must be in the same contiguous subnet. Equal local
+and gateway addresses remain valid for the SoftAP one-argument API.
+
+Portal masks are limited to `/24` through `/28`, matching the DHCP constraint in
+the supported Arduino-ESP32 cores. Class A/B/C does not select the subnet: the
+one-argument overload remains `/24`, and the explicit overload uses CIDR mask
+validation rather than classful inference. Private RFC 1918 addresses remain the
+deployment recommendation to avoid collisions with Internet routes;
+`200.5.29.8/24` is supported locally but is not the default.
+
+After `softAPConfig()` and SoftAP startup, the library compares `WiFi.softAPIP()`
+and `WiFi.softAPSubnetMask()` with the requested values before binding DNS and
+HTTP. Any failure or mismatch stops DNS/WebServer/scan state and the SoftAP,
+clears Portal runtime buffers, restores a coherent state, and schedules saved
+credential recovery through the existing reconnect owner. The active Portal
+configuration is immutable until `stopConfigPortal()` completes, preventing
+DNS, redirects, and the SoftAP from disagreeing about the address.
 
 ## STA addressing
 

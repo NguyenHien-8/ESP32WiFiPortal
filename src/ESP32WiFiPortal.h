@@ -78,7 +78,9 @@ public:
   bool eraseCredentials(bool disconnect = true);
 
   // Optional tuning.
-  // The one-argument overload uses localIP as the gateway and a /24 subnet.
+  // Accepts usable unicast IPv4 addresses (legacy Class A/B/C ranges). The
+  // one-argument overload uses localIP as gateway and a /24 subnet. Explicit
+  // Portal subnets are limited to /24.../28 for Arduino-ESP32 SoftAP DHCP.
   // Portal addressing can only be changed while the portal is stopped.
   bool setPortalIP(const IPAddress& localIP);
   bool setPortalIP(const IPAddress& localIP,
@@ -159,6 +161,7 @@ private:
   static constexpr uint32_t kScanTimeoutMs = 15000;
 
   bool openPortal(const char* apSSID, const char* apPassword, uint32_t portalTimeoutMs);
+  bool failPortalStart(const char* message);
   void configureRoutes();
   void handleRoot();
   void handleScan();
