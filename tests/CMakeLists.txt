@@ -31,6 +31,18 @@ add_executable(portal_lifecycle PortalLifecycleTest.cpp)
 target_link_libraries(portal_lifecycle PRIVATE fake_esp32_portal)
 add_test(NAME portal_lifecycle COMMAND portal_lifecycle)
 
+add_executable(credential_storage CredentialStorageTest.cpp)
+target_link_libraries(credential_storage PRIVATE fake_esp32_portal)
+add_test(NAME credential_storage COMMAND credential_storage)
+
+add_executable(auto_reconnect AutoReconnectTest.cpp)
+target_link_libraries(auto_reconnect PRIVATE fake_esp32_portal)
+add_test(NAME auto_reconnect COMMAND auto_reconnect)
+
+add_executable(portal_page PortalPageTest.cpp)
+target_link_libraries(portal_page PRIVATE fake_esp32_portal)
+add_test(NAME portal_page COMMAND portal_page)
+
 add_executable(header_odr
   HeaderODRTest.cpp
   HeaderODRPartA.cpp

@@ -34,9 +34,16 @@ flowchart TD
     D -- Có --> F[Lưu cấu hình Portal IP trong object]
     C --> G[connectSaved hoặc autoConnect]
     F --> G
-    G --> H{Có credential trong NVS?}
-    H -- Không --> I{Đang dùng autoConnect?}
+    G --> H{cred_blob hợp lệ?}
     H -- Có --> J[Áp dụng DHCP hoặc Static STA IP và bắt đầu connection]
+    H -- Không tồn tại --> R{Legacy ssid/pass hợp lệ?}
+    R -- Có --> S[Ghi một blob, đọc lại và kiểm CRC]
+    S --> T{Xác minh thành công?}
+    T -- Có --> U[Xóa hai legacy key]
+    U --> J
+    T -- Không --> I{Đang dùng autoConnect?}
+    R -- Không --> I
+    H -- Hỏng --> I{Đang dùng autoConnect?}
     J --> K{Kết nối trước timeout?}
     K -- Có --> L[State = Connected]
     K -- Không --> M[WiFi.disconnect, trả false và đặt lịch credential đã lưu]
@@ -45,8 +52,9 @@ flowchart TD
     M --> I
 ```
 
-`connectSaved()` chỉ đọc namespace `ewp_wifi`; lỗi kết nối không xóa credential
-đã lưu. Nếu một Portal đang hoạt động, thư viện dừng và dọn Portal trước khi
+`connectSaved()` đọc namespace `ewp_wifi`; lỗi kết nối không xóa credential đã
+lưu. Record hỏng bị từ chối và không được Auto Reconnect sử dụng; lỗi mở NVS tạm
+thời được thử lại sau cooldown. Nếu một Portal đang hoạt động, thư viện dừng và dọn Portal trước khi
 chuyển sang `WIFI_STA`. Khi Auto Reconnect bật, một lần blocking thất bại vẫn
 đặt lịch thử lại non-blocking; `autoConnect()` sẽ hủy lịch này khi chuyển ngay
 sang Portal nên không có hai owner kết nối.
@@ -119,7 +127,7 @@ hợp lệ sẽ hủy scan đang chạy và giải phóng kết quả; không c�
 
 ```mermaid
 flowchart TD
-    A[POST /save] --> B{SSID và password có độ dài hợp lệ?}
+    A[POST /save] --> B{SSID đúng 1-32 byte và password rỗng hoặc 8-63 byte?}
     B -- Không --> C[HTTP 400]
     B -- Có --> D{Đã có attempt pending hoặc active?}
     D -- Có --> E[HTTP 409]
@@ -138,8 +146,8 @@ flowchart TD
     R -- Có --> S[Đặt lịch retry bằng millis và backoff]
     S --> H
     R -- Không --> T[Xóa credential tạm, giữ Portal]
-    I -- Có --> M[Ghi credential mới vào Preferences/NVS]
-    M --> N{Ghi thành công?}
+    I -- Có --> M[Serialize một cred_blob và putBytes một lần]
+    M --> N{Đọc lại đủ byte, metadata và CRC hợp lệ?}
     N -- Không --> O[Ngắt candidate STA, xóa dữ liệu tạm, giữ Portal]
     N -- Có --> P[Gọi callback, dừng Portal, giữ STA connected]
     P --> Q[State = Connected]
@@ -149,6 +157,10 @@ Credential cũ trong NVS không bị thay đổi khi candidate không kết nố
 khi Portal hết thời gian. Việc ghi chỉ diễn ra sau khi `WL_CONNECTED`. Handshake
 timeout không tự động chứng minh password sai vì cũng có thể do sóng yếu hoặc AP
 đang restart.
+
+SSID từ cả danh sách scan và **Advanced Wi-Fi Setting** được giữ nguyên byte,
+không gọi `trim()`. Advanced view dùng cùng POST `/save`, cùng candidate RAM và
+cùng state machine; password không nằm trong URL hoặc browser storage.
 
 ## Wi-Fi event và Auto Reconnect
 
@@ -181,6 +193,9 @@ tạm thời nên sau cooldown thiết bị vẫn có thể phục hồi. Với 
 có thể xuất hiện do packet loss, AP quá tải hoặc router restart. Nếu password
 thực sự đã đổi, cooldown giới hạn tần suất thử và tránh reconnect storm. Callback
 không gọi Serial, DNS, WebServer, Preferences hoặc API Wi-Fi blocking.
+`setConnectTimeout(0)` và `connectSaved(0)` được chuẩn hóa thành 15000 ms, nên
+blocking connect, Portal candidate và Auto Reconnect không thể giữ một attempt
+vô hạn.
 
 ## Timeout, stop và restart Portal
 
@@ -214,9 +229,9 @@ Khi restart Portal, lịch phục hồi tạm thời được hủy trước khi
 
 ```mermaid
 flowchart LR
-    A[eraseCredentials false] --> B[Xóa namespace ewp_wifi]
+    A[eraseCredentials false] --> B[Xóa cred_blob, ssid và pass]
     B --> C[Không chủ động ngắt Wi-Fi]
-    D[eraseCredentials true] --> F[Xóa namespace ewp_wifi]
+    D[eraseCredentials true] --> F[Xóa cred_blob, ssid và pass]
     F --> E[Dừng và cleanup Portal nếu đang chạy]
     E --> G[Ngắt Wi-Fi và xóa cấu hình Wi-Fi của core]
     G --> H[State = Idle]

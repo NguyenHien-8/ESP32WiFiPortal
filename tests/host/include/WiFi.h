@@ -47,6 +47,7 @@ struct FakeWiFiState {
   uint32_t softAPCalls = 0;
   uint32_t softAPDisconnectCalls = 0;
   uint32_t disconnectCalls = 0;
+  uint32_t beginCalls = 0;
   IPAddress requestedIP;
   IPAddress requestedGateway;
   IPAddress requestedSubnet;
@@ -55,6 +56,8 @@ struct FakeWiFiState {
   IPAddress staIP;
   wl_status_t status = WL_DISCONNECTED;
   wl_status_t beginResult = WL_IDLE_STATUS;
+  String lastSSID;
+  String lastPassword;
 };
 
 extern FakeWiFiState FakeWiFi;
@@ -128,7 +131,12 @@ public:
     return FakeWiFi.configResult;
   }
 
-  wl_status_t begin(const char*, const char*) { return FakeWiFi.beginResult; }
+  wl_status_t begin(const char* ssid, const char* password) {
+    ++FakeWiFi.beginCalls;
+    FakeWiFi.lastSSID = ssid;
+    FakeWiFi.lastPassword = password;
+    return FakeWiFi.beginResult;
+  }
   IPAddress localIP() const { return FakeWiFi.staIP; }
   const char* disconnectReasonName(wifi_err_reason_t) const { return "fake"; }
 };

@@ -4,7 +4,9 @@
 
 ## Runtime flow
 
-1. `connectSaved()` reads SSID/password from the Preferences/NVS namespace `ewp_wifi`.
+1. `connectSaved()` validates the single `cred_blob` record in the
+   Preferences/NVS namespace `ewp_wifi`, migrating a complete legacy
+   `ssid`/`pass` pair when needed.
 2. The library applies DHCP or the validated static STA IP/DNS configuration.
 3. The ESP32 attempts the STA connection and `WiFi.onEvent()` reports link/IP
    changes through atomic event flags.
@@ -15,11 +17,48 @@
 8. `/scan` starts an asynchronous Wi-Fi scan, returns HTTP `202` while it is
    running, then returns the nearby networks as JSON when polling observes it
    ready.
-9. `/save` validates credentials and keeps them temporarily in RAM.
+9. `/save` validates exact credential byte lengths without trimming the SSID and
+   keeps the values temporarily in RAM.
 10. `process()` starts and monitors the candidate STA connection while the SoftAP
    remains available.
-11. Only a successful candidate connection is written to Preferences/NVS. The
-    portal then stops while the connected STA interface remains active.
+11. Only a successful candidate connection is serialized and written with one
+    NVS `putBytes()`. Exact read-back plus CRC validation must pass before the
+    RAM cache changes. The portal then stops while the connected STA interface
+    remains active.
+
+## Credential record and migration
+
+The credential format is explicitly serialized rather than relying on compiler
+struct packing. Its 112-byte little-endian layout is:
+
+| Offset | Size | Field |
+| ---: | ---: | --- |
+| 0 | 4 | Magic `EWPC` (`0x43505745`) |
+| 4 | 2 | Format version (`1`) |
+| 6 | 2 | Record size (`112`) |
+| 8 | 1 | SSID byte length (`1..32`) |
+| 9 | 1 | Password byte length (`0` or `8..63`) |
+| 10 | 33 | Zero-padded SSID storage |
+| 43 | 65 | Zero-padded password storage |
+| 108 | 4 | CRC32 over bytes `0..107` |
+
+CRC32 uses the IEEE reflected polynomial `0xEDB88320`, initial/final XOR
+`0xFFFFFFFF`; the standard `123456789` vector evaluates to `0xCBF43926`.
+Metadata, lengths, padding, payload, exact NVS byte count, and CRC all have to
+validate. CRC is accidental-corruption detection only; it does not authenticate
+or encrypt credentials.
+
+The loader distinguishes four usable outcomes: valid, not found, temporarily
+unavailable NVS, and corrupt. A corrupt record is not cached, is not handed to
+`WiFi.begin()`, and does not enter the reconnect loop. Temporary NVS open/write
+failure is retried only after the normal reconnect cooldown.
+
+Migration prefers a valid blob. If no valid blob exists but both legacy keys
+form a valid pair, it writes and reads back the blob before deleting either
+legacy key. Thus a reset during migration leaves either the old complete pair,
+the new verified blob, or a detectable invalid partial write—never a newly
+constructed mixed SSID/password pair. A valid blob plus stale legacy keys is
+accepted and the interrupted cleanup is completed opportunistically.
 
 ## Core dependencies
 
@@ -112,12 +151,19 @@ This leaves exactly one owner for connection timing:
 All elapsed-time tests use unsigned `millis()` subtraction and remain safe across
 timer overflow.
 
+`setConnectTimeout(0)` and `connectSaved(0)` are normalized to 15000 ms. Portal
+candidates, blocking saved connections, and every Auto Reconnect attempt
+therefore have a finite deadline; `process()` contains no wait loop and advances
+at most the currently ready state transition.
+
 ## State and cleanup invariants
 
 - Blocking, Portal candidate, and Auto Reconnect attempts share one setup/cancel
   path around `WiFi.config()`, `WiFi.begin()`, and `WiFi.disconnect()`.
 - At most one library-managed STA attempt can be active.
-- A failed candidate never overwrites credentials in the `ewp_wifi` namespace.
+- A candidate that fails to connect never starts an NVS credential write.
+- A failed/short blob write never updates the RAM cache and remains detectable
+  by exact record-size and CRC checks on reboot.
 - Credentials are read into a synchronized object cache once and reused by
   reconnect attempts; successful saves and erases update that cache.
 - Closing or timing out an unsuccessful Portal schedules the saved credentials
@@ -131,6 +177,8 @@ timer overflow.
 - `connectSaved()` stops an active portal before switching to `WIFI_STA`.
 - `eraseCredentials(true)` coordinates successful NVS erasure with portal cleanup
   and Wi-Fi disconnection, so server and Wi-Fi state cannot diverge.
+- `eraseCredentials()` removes `cred_blob`, `ssid`, and `pass` explicitly while
+  leaving unrelated namespace values untouched.
 
 ## Heap behavior on repeated paths
 

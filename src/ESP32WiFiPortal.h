@@ -3,7 +3,7 @@
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library header
  * @version 2.1.1
- * @date 2026-08-31
+ * @date 2026-09-10
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
@@ -44,6 +44,7 @@ public:
   ESP32WiFiPortal& operator=(const ESP32WiFiPortal&) = delete;
 
   // Connect using credentials stored by this library in ESP32 NVS.
+  // timeoutMs == 0 is normalized to the finite 15000 ms default.
   bool connectSaved(uint32_t timeoutMs = 15000);
 
   // Convenience startup: try saved Wi-Fi, then optionally open a blocking portal.
@@ -164,6 +165,14 @@ private:
     Failed
   };
 
+  enum class CredentialCacheStatus : uint8_t {
+    Unknown,
+    Valid,
+    NotFound,
+    Unavailable,
+    Corrupt
+  };
+
   struct ScanNetworkIdentity {
     uint32_t hash;
     int index;
@@ -172,8 +181,22 @@ private:
   static constexpr uint16_t kDnsPort = 53;
   static constexpr uint16_t kHttpPort = 80;
   static constexpr const char* kPrefsNamespace = "ewp_wifi";
+  static constexpr const char* kPrefsCredential = "cred_blob";
   static constexpr const char* kPrefsSSID = "ssid";
   static constexpr const char* kPrefsPassword = "pass";
+  static constexpr uint32_t kCredentialMagic = 0x43505745UL;  // "EWPC"
+  static constexpr uint16_t kCredentialVersion = 1;
+  static constexpr size_t kCredentialSSIDCapacity = 33;
+  static constexpr size_t kCredentialPasswordCapacity = 65;
+  static constexpr size_t kCredentialSSIDOffset = 10;
+  static constexpr size_t kCredentialPasswordOffset =
+      kCredentialSSIDOffset + kCredentialSSIDCapacity;
+  static constexpr size_t kCredentialCRCOffset =
+      kCredentialPasswordOffset + kCredentialPasswordCapacity;
+  static constexpr size_t kCredentialRecordSize = kCredentialCRCOffset + 4;
+  static constexpr uint32_t kDefaultConnectTimeoutMs = 15000;
+  static_assert(kCredentialRecordSize == 112,
+                "Credential record layout changed unexpectedly");
   static constexpr uint32_t kEventSTAConnected = 1UL << 0;
   static constexpr uint32_t kEventSTAGotIP = 1UL << 1;
   static constexpr uint32_t kEventSTADisconnected = 1UL << 2;
@@ -348,6 +371,28 @@ private:
   uint32_t retryDelay(uint8_t retryNumber) const;
   bool saveCredentials(const String& ssid, const String& password);
   bool ensureCredentialCache();
+  static bool validSTACredentials(const String& ssid,
+                                  const String& password);
+  static uint32_t credentialCRC32(const uint8_t* data, size_t length);
+  static bool serializeCredentialRecord(const String& ssid,
+                                        const String& password,
+                                        uint8_t* record,
+                                        size_t recordSize);
+  static bool deserializeCredentialRecord(const uint8_t* record,
+                                          size_t recordSize,
+                                          String& ssid,
+                                          String& password);
+  static void secureClear(void* data, size_t length);
+  CredentialCacheStatus readCredentialBlob(Preferences& prefs,
+                                           String& ssid,
+                                           String& password);
+  CredentialCacheStatus readLegacyCredentials(Preferences& prefs,
+                                               String& ssid,
+                                               String& password);
+  bool writeCredentialRecord(Preferences& prefs,
+                             const String& ssid,
+                             const String& password);
+  void clearCredentialCache(CredentialCacheStatus status);
   bool validAPPassword(const char* password) const;
   bool portalTimedOut() const;
   bool isCredentialFailureReason(uint8_t reason) const;
@@ -368,7 +413,7 @@ private:
   bool _attemptTerminalFailure = false;
   bool _staDisconnected = false;
 
-  uint32_t _connectTimeoutMs = 15000;
+  uint32_t _connectTimeoutMs = kDefaultConnectTimeoutMs;
   uint32_t _portalTimeoutMs = 0;
   uint32_t _portalStartedAt = 0;
   uint32_t _connectPendingAt = 0;
@@ -415,8 +460,8 @@ private:
   String _pendingPassword;
   String _savedSSID;
   String _savedPassword;
-  bool _credentialCacheLoaded = false;
-  bool _credentialCacheValid = false;
+  CredentialCacheStatus _credentialCacheStatus =
+      CredentialCacheStatus::Unknown;
 
   String _responseBuffer;
   String _scanSSID;
