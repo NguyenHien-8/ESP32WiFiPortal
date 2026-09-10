@@ -2,7 +2,7 @@
  * @file ESP32WiFiPortal.cpp
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library implementation
- * @version 1.1.1
+ * @version 2.1.1
  * @date 2026-08-31
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
@@ -10,77 +10,11 @@
 
 #include "ESP32WiFiPortal.h"
 #include "PortalPage.h"
-#include "PortalNetworkValidation.h"
 
 #include <esp_wifi.h>
 #include <new>
 
 namespace {
-uint32_t ipToUint32(const IPAddress& address) {
-  return (static_cast<uint32_t>(address[0]) << 24) |
-         (static_cast<uint32_t>(address[1]) << 16) |
-         (static_cast<uint32_t>(address[2]) << 8) |
-         static_cast<uint32_t>(address[3]);
-}
-
-bool isUsableUnicastIPv4(const IPAddress& address) {
-  return ewp_internal::isUsableUnicastIPv4(ipToUint32(address));
-}
-
-bool isValidIPv4Network(const IPAddress& localIP,
-                        const IPAddress& gateway,
-                        const IPAddress& subnet) {
-  if (!isUsableUnicastIPv4(localIP) || !isUsableUnicastIPv4(gateway)) {
-    return false;
-  }
-
-  const uint32_t local = ipToUint32(localIP);
-  const uint32_t gatewayValue = ipToUint32(gateway);
-  const uint32_t mask = ipToUint32(subnet);
-  if (mask == 0 || mask == 0xFFFFFFFFUL) return false;
-
-  const uint32_t hostMask = ~mask;
-  if ((hostMask & (hostMask + 1UL)) != 0) return false;
-  if ((local & mask) != (gatewayValue & mask)) return false;
-
-  const uint32_t localHost = local & hostMask;
-  const uint32_t gatewayHost = gatewayValue & hostMask;
-  return localHost != 0 && localHost != hostMask &&
-         gatewayHost != 0 && gatewayHost != hostMask;
-}
-
-const char* portalNetworkValidationMessage(
-    ewp_internal::PortalNetworkValidationResult result) {
-  using ewp_internal::PortalNetworkValidationResult;
-  switch (result) {
-    case PortalNetworkValidationResult::InvalidLocalIP:
-      return "Portal IP is not a usable unicast IPv4 address";
-    case PortalNetworkValidationResult::InvalidGateway:
-      return "Portal gateway is not a usable unicast IPv4 address";
-    case PortalNetworkValidationResult::InvalidSubnetMask:
-      return "Portal subnet mask is invalid or non-contiguous";
-    case PortalNetworkValidationResult::UnsupportedSubnet:
-      return "Portal subnet must be between /24 and /28 for SoftAP DHCP";
-    case PortalNetworkValidationResult::DifferentSubnet:
-      return "Portal IP and gateway must be in the same subnet";
-    case PortalNetworkValidationResult::LocalIsNetworkAddress:
-      return "Portal IP cannot be the subnet network address";
-    case PortalNetworkValidationResult::LocalIsBroadcastAddress:
-      return "Portal IP cannot be the subnet broadcast address";
-    case PortalNetworkValidationResult::GatewayIsNetworkAddress:
-      return "Portal gateway cannot be the subnet network address";
-    case PortalNetworkValidationResult::GatewayIsBroadcastAddress:
-      return "Portal gateway cannot be the subnet broadcast address";
-    case PortalNetworkValidationResult::Valid:
-      return "";
-  }
-  return "Portal IPv4 configuration is invalid";
-}
-
-bool isValidDNS(const IPAddress& address) {
-  return ipToUint32(address) == 0 || isUsableUnicastIPv4(address);
-}
-
 void appendJsonEscaped(String& output, const String& value) {
   static const char kHex[] = "0123456789abcdef";
   for (size_t i = 0; i < value.length(); ++i) {
@@ -128,6 +62,37 @@ constexpr uint16_t ESP32WiFiPortal::kHttpPort;
 constexpr const char* ESP32WiFiPortal::kPrefsNamespace;
 constexpr const char* ESP32WiFiPortal::kPrefsSSID;
 constexpr const char* ESP32WiFiPortal::kPrefsPassword;
+
+const char* ESP32WiFiPortal::portalNetworkValidationMessage(
+    PortalNetworkValidationResult result) {
+  switch (result) {
+    case PortalNetworkValidationResult::InvalidLocalIP:
+      return "Portal IP is not a usable unicast IPv4 address";
+    case PortalNetworkValidationResult::InvalidGateway:
+      return "Portal gateway is not a usable unicast IPv4 address";
+    case PortalNetworkValidationResult::InvalidSubnetMask:
+      return "Portal subnet mask is invalid or non-contiguous";
+    case PortalNetworkValidationResult::UnsupportedSubnet:
+      return "Portal subnet must be between /24 and /28 for SoftAP DHCP";
+    case PortalNetworkValidationResult::DifferentSubnet:
+      return "Portal IP and gateway must be in the same subnet";
+    case PortalNetworkValidationResult::LocalIsNetworkAddress:
+      return "Portal IP cannot be the subnet network address";
+    case PortalNetworkValidationResult::LocalIsBroadcastAddress:
+      return "Portal IP cannot be the subnet broadcast address";
+    case PortalNetworkValidationResult::GatewayIsNetworkAddress:
+      return "Portal gateway cannot be the subnet network address";
+    case PortalNetworkValidationResult::GatewayIsBroadcastAddress:
+      return "Portal gateway cannot be the subnet broadcast address";
+    case PortalNetworkValidationResult::LocalConflictsWithDHCPLease:
+      return "Portal IP conflicts with the SoftAP DHCP lease range";
+    case PortalNetworkValidationResult::GatewayConflictsWithDHCPLease:
+      return "Portal gateway conflicts with the SoftAP DHCP lease range";
+    case PortalNetworkValidationResult::Valid:
+      return "";
+  }
+  return "Portal IPv4 configuration is invalid";
+}
 
 ESP32WiFiPortal::ESP32WiFiPortal()
     : _portalIP(192, 168, 4, 1),
@@ -244,6 +209,14 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
     return false;
   }
 
+  const PortalNetworkValidationResult validation = validatePortalNetwork(
+      ipv4ToUint32(_portalIP), ipv4ToUint32(_portalGateway),
+      ipv4ToUint32(_portalSubnet));
+  if (validation != PortalNetworkValidationResult::Valid) {
+    setError(portalNetworkValidationMessage(validation));
+    return false;
+  }
+
   ensureWiFiEventHandler();
   // Load the last known-good credentials before a Portal candidate can use
   // the STA interface. They remain cached until a candidate is proven and
@@ -283,8 +256,8 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
 
   // softAPConfig() can fail incompletely on some core/IDF combinations. Read
   // back the active netif before DNS and HTTP bind to a different address.
-  if (ipToUint32(WiFi.softAPIP()) != ipToUint32(_portalIP) ||
-      ipToUint32(WiFi.softAPSubnetMask()) != ipToUint32(_portalSubnet)) {
+  if (ipv4ToUint32(WiFi.softAPIP()) != ipv4ToUint32(_portalIP) ||
+      ipv4ToUint32(WiFi.softAPSubnetMask()) != ipv4ToUint32(_portalSubnet)) {
     return failPortalStart(
         "SoftAP runtime IP/subnet does not match the portal configuration");
   }
@@ -295,8 +268,10 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   appendIPAddress(_redirectURL, WiFi.softAPIP());
   _redirectURL += '/';
 
-  _portalActive = true;
-  _server.reset(new WebServer(kHttpPort));
+  _server.reset(new (std::nothrow) WebServer(kHttpPort));
+  if (!_server) {
+    return failPortalStart("Unable to allocate captive portal WebServer");
+  }
   configureRoutes();
   _server->begin();
 
@@ -305,6 +280,7 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
     return failPortalStart("Failed to start captive portal DNS");
   }
 
+  _portalActive = true;
   _state = State::Portal;
   if (_loggingEnabled) {
     Serial.print(F("[EWP] Portal started: http://"));
@@ -1219,11 +1195,9 @@ bool ESP32WiFiPortal::setPortalIP(const IPAddress& localIP,
     setError("Portal IP cannot be changed while the portal is active");
     return false;
   }
-  const ewp_internal::PortalNetworkValidationResult validation =
-      ewp_internal::validatePortalNetwork(ipToUint32(localIP),
-                                          ipToUint32(gateway),
-                                          ipToUint32(subnet));
-  if (validation != ewp_internal::PortalNetworkValidationResult::Valid) {
+  const PortalNetworkValidationResult validation = validatePortalNetwork(
+      ipv4ToUint32(localIP), ipv4ToUint32(gateway), ipv4ToUint32(subnet));
+  if (validation != PortalNetworkValidationResult::Valid) {
     setError(portalNetworkValidationMessage(validation));
     return false;
   }
@@ -1244,10 +1218,14 @@ bool ESP32WiFiPortal::setSTAStaticIP(const IPAddress& localIP,
     setError("STA IP cannot be changed during a connection attempt");
     return false;
   }
-  if (!isValidIPv4Network(localIP, gateway, subnet) ||
-      ipToUint32(localIP) == ipToUint32(gateway) ||
-      !isValidDNS(primaryDNS) || !isValidDNS(secondaryDNS) ||
-      (ipToUint32(primaryDNS) == 0 && ipToUint32(secondaryDNS) != 0)) {
+  const uint32_t local = ipv4ToUint32(localIP);
+  const uint32_t gatewayValue = ipv4ToUint32(gateway);
+  const uint32_t primaryDNSValue = ipv4ToUint32(primaryDNS);
+  const uint32_t secondaryDNSValue = ipv4ToUint32(secondaryDNS);
+  if (!isValidSTANetwork(local, gatewayValue, ipv4ToUint32(subnet)) ||
+      local == gatewayValue || !isValidDNSAddress(primaryDNSValue) ||
+      !isValidDNSAddress(secondaryDNSValue) ||
+      (primaryDNSValue == 0 && secondaryDNSValue != 0)) {
     setError("STA IP, gateway, subnet, or DNS configuration is invalid");
     return false;
   }

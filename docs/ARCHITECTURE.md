@@ -43,13 +43,26 @@ are rejected, and both hosts must be in the same contiguous subnet. Equal local
 and gateway addresses remain valid for the SoftAP one-argument API.
 
 Portal masks are limited to `/24` through `/28`, matching the DHCP constraint in
-the supported Arduino-ESP32 cores. Class A/B/C does not select the subnet: the
-one-argument overload remains `/24`, and the explicit overload uses CIDR mask
-validation rather than classful inference. Private RFC 1918 addresses remain the
-deployment recommendation to avoid collisions with Internet routes;
+the supported Arduino-ESP32 cores (verified against the `/24.../28` guard in
+Arduino-ESP32 3.3.11). Validation also mirrors that core's default inclusive
+DHCP pool placement, rejecting a Portal IP or gateway that would fall inside the
+pool and make `softAPConfig()` fail later. Class A/B/C does not select the
+subnet: the one-argument overload remains `/24`, and the explicit overload uses
+CIDR mask validation rather than classful inference. Private RFC 1918 addresses
+remain the deployment recommendation to avoid collisions with Internet routes;
 `200.5.29.8/24` is supported locally but is not the default.
 
-After `softAPConfig()` and SoftAP startup, the library compares `WiFi.softAPIP()`
+The address, netmask, subnet, network, broadcast, Portal-policy, and STA-policy
+validators are private static inline members of `ESP32WiFiPortal` in the core
+header. There is one implementation used by both `setPortalIP(...)` and Portal
+startup, no global mutable validation state, and no validation-time heap or
+`String` allocation. Because the in-class definitions are implicitly inline,
+including `ESP32WiFiPortal.h` from multiple translation units cannot create
+duplicate linker symbols. Portal-specific prefix limits remain separate from
+the less restrictive static STA policy.
+
+Portal startup validates the stored configuration again immediately before
+calling `softAPConfig()`. After SoftAP startup, the library compares `WiFi.softAPIP()`
 and `WiFi.softAPSubnetMask()` with the requested values before binding DNS and
 HTTP. Any failure or mismatch stops DNS/WebServer/scan state and the SoftAP,
 clears Portal runtime buffers, restores a coherent state, and schedules saved

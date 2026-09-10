@@ -2,7 +2,7 @@
  * @file OnDemand.ino
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief Example sketch demonstrating on-demand Wi-Fi configuration portal using ESP32WiFiPortal library.
- * @version 1.1.1
+ * @version 2.1.1
  * @date 2026-08-31
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.

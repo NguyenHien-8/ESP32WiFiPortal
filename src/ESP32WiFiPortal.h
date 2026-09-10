@@ -2,7 +2,7 @@
  * @file ESP32WiFiPortal.h
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library header
- * @version 1.1.1
+ * @version 2.1.1
  * @date 2026-08-31
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
@@ -124,6 +124,26 @@ public:
   uint8_t lastDisconnectReason() const;
 
 private:
+#if defined(ESP32WIFIPORTAL_ENABLE_TEST_ACCESS)
+  // Host tests exercise the exact private implementation used at runtime.
+  friend struct ESP32WiFiPortalTestAccess;
+#endif
+
+  enum class PortalNetworkValidationResult : uint8_t {
+    Valid,
+    InvalidLocalIP,
+    InvalidGateway,
+    InvalidSubnetMask,
+    UnsupportedSubnet,
+    DifferentSubnet,
+    LocalIsNetworkAddress,
+    LocalIsBroadcastAddress,
+    GatewayIsNetworkAddress,
+    GatewayIsBroadcastAddress,
+    LocalConflictsWithDHCPLease,
+    GatewayConflictsWithDHCPLease
+  };
+
   enum class ConnectionOwner : uint8_t {
     None,
     Blocking,
@@ -159,6 +179,143 @@ private:
   static constexpr uint32_t kEventSTADisconnected = 1UL << 2;
   static constexpr uint32_t kSTADisconnectSettleMs = 20;
   static constexpr uint32_t kScanTimeoutMs = 15000;
+
+  // Allocation-free IPv4 helpers live in the class so Portal and STA policy
+  // share only their low-level primitives. Definitions inside the class are
+  // implicitly inline, making this header safe in multiple translation units.
+  static inline uint32_t ipv4ToUint32(const IPAddress& address) {
+    return (static_cast<uint32_t>(address[0]) << 24) |
+           (static_cast<uint32_t>(address[1]) << 16) |
+           (static_cast<uint32_t>(address[2]) << 8) |
+           static_cast<uint32_t>(address[3]);
+  }
+
+  static inline bool isUsableUnicastIPv4(uint32_t address) {
+    const uint8_t firstOctet = static_cast<uint8_t>(address >> 24);
+    return address != 0 && address != 0xFFFFFFFFUL && firstOctet != 0 &&
+           firstOctet != 127 && firstOctet < 224;
+  }
+
+  static inline bool isContiguousSubnetMask(uint32_t mask) {
+    if (mask == 0 || mask == 0xFFFFFFFFUL) return false;
+    const uint32_t hostMask = ~mask;
+    return (hostMask & (hostMask + 1UL)) == 0;
+  }
+
+  static inline uint8_t subnetPrefixLength(uint32_t mask) {
+    uint8_t prefixLength = 0;
+    while ((mask & 0x80000000UL) != 0) {
+      ++prefixLength;
+      mask <<= 1;
+    }
+    return prefixLength;
+  }
+
+  static inline bool isSameSubnet(uint32_t first,
+                                  uint32_t second,
+                                  uint32_t mask) {
+    return (first & mask) == (second & mask);
+  }
+
+  static inline uint32_t networkAddress(uint32_t address, uint32_t mask) {
+    return address & mask;
+  }
+
+  static inline uint32_t broadcastAddress(uint32_t address, uint32_t mask) {
+    return networkAddress(address, mask) | ~mask;
+  }
+
+  static inline uint32_t defaultDHCPLeaseStart(uint32_t local,
+                                               uint32_t mask) {
+    const uint32_t hostMask = ~mask;
+    const uint32_t candidate = local + 1UL;
+    // Arduino-ESP32 keeps eleven inclusive addresses available to its SoftAP
+    // DHCP server and moves an overflowing default range to network + 1.
+    return ((candidate & hostMask) >= hostMask - 10UL)
+               ? networkAddress(local, mask) + 1UL
+               : candidate;
+  }
+
+  static inline bool isInInclusiveRange(uint32_t address,
+                                        uint32_t first,
+                                        uint32_t last) {
+    return address >= first && address <= last;
+  }
+
+  static inline PortalNetworkValidationResult validatePortalNetwork(
+      uint32_t local,
+      uint32_t gateway,
+      uint32_t mask) {
+    if (!isUsableUnicastIPv4(local)) {
+      return PortalNetworkValidationResult::InvalidLocalIP;
+    }
+    if (!isUsableUnicastIPv4(gateway)) {
+      return PortalNetworkValidationResult::InvalidGateway;
+    }
+    if (!isContiguousSubnetMask(mask)) {
+      return PortalNetworkValidationResult::InvalidSubnetMask;
+    }
+
+    const uint8_t prefixLength = subnetPrefixLength(mask);
+    if (prefixLength < 24 || prefixLength > 28) {
+      return PortalNetworkValidationResult::UnsupportedSubnet;
+    }
+    if (!isSameSubnet(local, gateway, mask)) {
+      return PortalNetworkValidationResult::DifferentSubnet;
+    }
+
+    const uint32_t network = networkAddress(local, mask);
+    const uint32_t broadcast = broadcastAddress(local, mask);
+    if (local == network) {
+      return PortalNetworkValidationResult::LocalIsNetworkAddress;
+    }
+    if (local == broadcast) {
+      return PortalNetworkValidationResult::LocalIsBroadcastAddress;
+    }
+    if (gateway == network) {
+      return PortalNetworkValidationResult::GatewayIsNetworkAddress;
+    }
+    if (gateway == broadcast) {
+      return PortalNetworkValidationResult::GatewayIsBroadcastAddress;
+    }
+
+    // Match the default lease-range selection in Arduino-ESP32 3.x. This
+    // prevents setPortalIP() from accepting a host/gateway that AP.config()
+    // would later reject because it overlaps the DHCP pool.
+    const uint32_t leaseStart = defaultDHCPLeaseStart(local, mask);
+    const uint32_t leaseEnd = leaseStart + 10UL;
+    if (isInInclusiveRange(local, leaseStart, leaseEnd)) {
+      return PortalNetworkValidationResult::LocalConflictsWithDHCPLease;
+    }
+    if (isInInclusiveRange(gateway, leaseStart, leaseEnd)) {
+      return PortalNetworkValidationResult::GatewayConflictsWithDHCPLease;
+    }
+
+    return PortalNetworkValidationResult::Valid;
+  }
+
+  // STA static addressing intentionally has no SoftAP /24.../28 restriction.
+  static inline bool isValidSTANetwork(uint32_t local,
+                                       uint32_t gateway,
+                                       uint32_t mask) {
+    if (!isUsableUnicastIPv4(local) ||
+        !isUsableUnicastIPv4(gateway) ||
+        !isContiguousSubnetMask(mask) ||
+        !isSameSubnet(local, gateway, mask)) {
+      return false;
+    }
+    const uint32_t network = networkAddress(local, mask);
+    const uint32_t broadcast = broadcastAddress(local, mask);
+    return local != network && local != broadcast && gateway != network &&
+           gateway != broadcast;
+  }
+
+  static inline bool isValidDNSAddress(uint32_t address) {
+    return address == 0 || isUsableUnicastIPv4(address);
+  }
+
+  static const char* portalNetworkValidationMessage(
+      PortalNetworkValidationResult result);
 
   bool openPortal(const char* apSSID, const char* apPassword, uint32_t portalTimeoutMs);
   bool failPortalStart(const char* message);

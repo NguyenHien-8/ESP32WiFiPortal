@@ -1,4 +1,4 @@
-# Lưu đồ hoạt động ESP32WiFiPortal 1.1.1
+# Lưu đồ hoạt động ESP32WiFiPortal 2.1.1
 
 Tài liệu này mô tả state machine chung cho kết nối blocking, Config Portal
 non-blocking, Wi-Fi event, retry và Auto Reconnect.
@@ -55,7 +55,9 @@ sang Portal nên không có hai owner kết nối.
 
 ```mermaid
 flowchart TD
-    A[startConfigPortal hoặc startConfigPortalAsync] --> B[stopConfigPortal để dọn phiên cũ]
+    A[startConfigPortal hoặc startConfigPortalAsync] --> V{Revalidate Portal IP gateway subnet}
+    V -- Không hợp lệ --> Y[Trả false, không khởi động tài nguyên]
+    V -- Hợp lệ --> B[stopConfigPortal để dọn phiên cũ]
     B --> C[Chuyển sang WIFI_AP_STA]
     C --> D[Áp dụng local IP, gateway, subnet bằng softAPConfig]
     D --> E{Cấu hình IP thành công?}
@@ -81,6 +83,15 @@ Validator chấp nhận unicast Class A/B/C hợp lệ nhưng dùng CIDR `/24` �
 cho DHCP SoftAP; không suy ra classful `/8` hoặc `/16`. RFC 1918 vẫn được khuyến
 nghị để tránh xung đột route. `200.5.29.8/24` được hỗ trợ cho SoftAP cục bộ nhưng
 không thay thế default an toàn `192.168.4.1/24`.
+
+Validator cũng tính trước lease pool mặc định của Arduino-ESP32 3.3.11 và từ
+chối IP/gateway nằm trong pool, tránh trường hợp setter thành công nhưng
+`softAPConfig()` chắc chắn thất bại khi khởi động.
+
+Các phép kiểm tra IPv4 thuần được đóng gói thành helper `private static inline`
+ngay trong class `ESP32WiFiPortal`. Vì vậy thư viện chỉ có một implementation,
+không mở rộng public API, không cấp phát heap khi validate và không phát sinh
+multiple-definition khi nhiều translation unit cùng include header chính.
 
 ## Wi-Fi scan non-blocking trong Portal
 

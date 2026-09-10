@@ -1,4 +1,4 @@
-# ESP32WiFiPortal 1.1.1
+# ESP32WiFiPortal 2.1.1
 
 ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 
@@ -83,7 +83,9 @@ The local IP and gateway must be usable host addresses in the same contiguous
 subnet; zero/`0.x.x.x`, loopback, multicast/reserved, network, and broadcast
 addresses are rejected. Portal subnets are restricted to `/24` through `/28`,
 matching the DHCP range supported by current Arduino-ESP32 SoftAP cores. The
-configuration cannot be changed while the portal is active. After
+Portal IP and gateway also cannot overlap the default lease pool that the core
+derives from the selected Portal IP. The configuration cannot be changed while
+the portal is active. After
 `WiFi.softAPConfig()` succeeds, the library reads back the runtime SoftAP IP and
 subnet before starting DNS and HTTP; a mismatch is cleaned up and reported.
 
@@ -229,13 +231,17 @@ uint8_t lastDisconnectReason() const;
 bool eraseCredentials(bool disconnect = true);
 ```
 
-## Compatibility notes for 1.1.1
+## Changes in 2.1.1
 
 - Existing public APIs remain source-compatible.
-- The default SoftAP address changed from `200.5.29.8` to `192.168.4.1`.
-- `setPortalIP(...)` is additive; existing sketches need no source changes.
+- The default SoftAP address remains `192.168.4.1/24`.
 - Portal IPs may use any valid unicast Class A/B/C address, while SoftAP DHCP
   subnets are explicitly limited to `/24` through `/28`.
+- Portal validation mirrors the target core's default DHCP lease placement, so
+  an IP or gateway inside that lease pool is rejected before Portal startup.
+- Allocation-free IPv4 validation is now encapsulated by private, inline helpers
+  in the core `ESP32WiFiPortal` class; applications still include only
+  `ESP32WiFiPortal.h`.
 - The default connection retry count is zero. Auto Reconnect remains enabled by
   default, but now uses the bounded library policy instead of an independent
   core reconnect loop.
