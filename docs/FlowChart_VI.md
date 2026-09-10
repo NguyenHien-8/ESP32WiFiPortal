@@ -1,7 +1,6 @@
 # Lưu đồ hoạt động ESP32WiFiPortal 2.1.1
 
-Tài liệu này mô tả state machine chung cho kết nối blocking, Config Portal
-non-blocking, Wi-Fi event, retry và Auto Reconnect.
+Tài liệu này mô tả state machine của `ESP32WiFiPortal` 2.1.1 cho kết nối blocking, Config Portal blocking/non-blocking, Wi-Fi event, retry, Auto Reconnect và Wi-Fi scan bất đồng bộ.
 
 ## Cấu hình địa chỉ STA
 
@@ -240,160 +239,185 @@ flowchart LR
 `eraseCredentials()` là thao tác xóa duy nhất do API công khai yêu cầu. Connect
 timeout, Portal timeout và `stopConfigPortal()` không xóa credential đã lưu.
 
+---
+
 ## Async Wi-Fi scan
 
-```
-/scan
- ↓
-Idle
- ↓
-start async scan
- ↓
-Scanning
- ↓
-HTTP 202
- ↓
-return
+```mermaid
+flowchart TD
+    A[Browser GET /scan] --> B[handleScan]
+    B --> C{Pending/active connection?}
+    C -- Có --> D[HTTP 409]
+    C -- Không --> E[processScan]
+    E --> F{ScanState}
 
-process()
- ↓
-scanComplete()
- ↓
-Running?
- ├─ Yes → return
- └─ No
-      ↓
-   Ready
+    F -- Idle --> G[WiFi.scanNetworks true,true]
+    G --> H{RUNNING?}
+    H -- Có --> I[State = Scanning]
+    H -- Không, result >= 0 --> J[State = Ready]
+    H -- Lỗi --> K[State = Failed]
 
-Browser gọi /scan lại
- ↓
-build JSON
- ↓
-scanDelete()
- ↓
-HTTP 200
-```
+    F -- Scanning --> L[WiFi.scanComplete]
+    L --> M{RUNNING và < 15 s?}
+    M -- Có --> I
+    M -- Không --> N{result >= 0?}
+    N -- Có --> J
+    N -- Không --> K
 
-## Function process() cooperative non-blocking
+    I --> O[HTTP 202]
+    O --> P[Browser đợi 400 ms]
+    P --> A
 
-```cooperative state machine
-loop()
-  ↓
-process()
-  ↓
-đọc state hiện tại
-  ↓
-thực hiện tối đa bước đang sẵn sàng
-  ↓
-return
-  ↓
-application tiếp tục chạy
-  ↓
-loop tiếp theo
+    J --> Q[Build JSON]
+    Q --> R[resetScan false / scanDelete]
+    R --> S[HTTP 200]
+
+    K --> T[HTTP 503]
+    T --> U[resetScan false]
 ```
 
+Trong khoảng thời gian browser đang đợi 400 ms, `process()` vẫn có thể gọi `processScan()` và chuyển `Scanning -> Ready/Failed`. Vì vậy không nên mô tả rằng chỉ `/scan` mới làm scan tiến triển.
+
+## Function `process()` cooperative non-blocking — luồng rút gọn chính xác
+
+`process()` **không chờ** Wi-Fi connection, settle delay, retry delay hoặc network scan. Tuy nhiên một lần gọi `process()` có thể phục vụ nhiều tác vụ đã sẵn sàng (event, scan, DNS, HTTP) trước khi trả về; không phải mỗi lần gọi chỉ thực hiện đúng một thao tác.
+
+```mermaid
+flowchart TD
+    A[loop] --> B[process]
+    B --> C[processWiFiEvents]
+    C --> D{Portal active?}
+
+    D -- Có --> E[processScan]
+    E --> F[DNS processNextRequest]
+    F --> G[WebServer handleClient]
+    G --> H{Portal timeout?}
+    H -- Có --> I[stopConfigPortal, cập nhật state, return]
+    H -- Không --> J{Pending connection đã tới thời điểm?}
+    J -- Có --> K[beginPendingConnection, return]
+    J -- Không --> L{Portal connection attempt active?}
+    L -- Có --> M[advanceSTAConnection / kiểm tra connected, terminal, timeout]
+    M --> N{Cần chờ thêm?}
+    N -- Có --> O[return]
+    N -- Không --> P[Xử lý success/failure/retry rồi return hoặc tiếp tục]
+    L -- Không --> Q[processAutoReconnect sẽ no-op vì Portal active]
+
+    D -- Không --> R[processAutoReconnect]
+    Q --> S[return]
+    R --> S
+    P --> S
+    O --> S
+    S --> T[Application tiếp tục chạy]
+    T --> A
 ```
+
+Ví dụ phase kết nối Portal candidate:
+
+```text
 process #1
-↓
-disconnect
-↓
-return
+  -> pending delay 350 ms đã hết
+  -> beginSTAConnection()
+  -> nếu STA chưa ở trạng thái clean: WiFi.disconnect()
+  -> Phase = Settling, settle delay = 20 ms
+  -> return
 
-application tiếp tục chạy
+process #2 ... #N
+  -> advanceSTAConnection()
+  -> nếu settle delay chưa hết: return nhanh
 
-process #2...
-↓
-20 ms chưa hết
-↓
-return
+process tiếp theo khi settle đã hết
+  -> applySTAConfig()
+  -> WiFi.begin()
+  -> Phase = Connecting
+  -> return sau các kiểm tra tức thời
 
-process #N
-↓
-20 ms hết
-↓
-WiFi.begin()
-↓
-return
+các process sau
+  -> đọc event / WiFi.status()
+  -> kiểm tra terminal failure hoặc connect timeout bằng millis()
+  -> không busy-wait
 ```
 
-## Luồng hoạt động
-```
-KHỞI ĐỘNG
-    ↓
-Đọc credential từ NVS → cache RAM
-    ↓
-Thử STA connection
-    │
-    ├──────── Thành công
-    │             ↓
-    │         Connected
-    │             ↓
-    │      Theo dõi WiFi Event
-    │             ↓
-    │        WiFi Disconnect
-    │             ↓
-    │      Schedule Auto Reconnect
-    │             ↓
-    │          WIFI_STA
-    │             ↓
-    │       Reconnect WiFi cũ
-    │          │
-    │          ├── Success
-    │          │      ↓
-    │          │  Connected
-    │          │
-    │          └── Fail
-    │                 ↓
-    │            Retry/Backoff
-    │                 ↓
-    │            Hết retry burst
-    │                 ↓
-    │              Cooldown
-    │                 ↓
-    │          Reconnect WiFi cũ
-    │                 ↓
-    │                ...
-    │
-    └──────── Thất bại lúc startup
-                  ↓
-             Config Portal
-                  ↓
-              WIFI_AP_STA
-                  ↓
-          DNS + WebServer + SoftAP
-                  ↓
-              Scan WiFi
-                  ↓
-          User nhập credential mới
-                  ↓
-             Thử kết nối
-              │
-              ├── Fail
-              │     ↓
-              │  Giữ Portal
-              │
-              │  Nếu Portal timeout/stop
-              │        ↓
-              │  Credential cũ còn?
-              │        │
-              │    ┌───┴───┐
-              │   Yes      No
-              │    ↓        ↓
-              │ Tắt AP    Idle/Failed
-              │    ↓
-              │ WIFI_STA
-              │    ↓
-              │ Auto Reconnect
-              │ WiFi cũ
-              │
-              └── Success
-                    ↓
-              Lưu NVS
-                    ↓
-              cập nhật cache
-                    ↓
-              Tắt Portal
-                    ↓
-                Connected
+Nếu STA đã ở trạng thái disconnected/clean, `_connectionSettleDelayMs` có thể bằng `0`; do đó **không phải mọi attempt đều bắt buộc chờ 20 ms**.
+
+Lưu ý: `process()` là cooperative non-blocking, nhưng các API `connectSaved()` và `startConfigPortal()` vẫn là API blocking theo thiết kế. `startConfigPortal()` đạt hành vi blocking bằng cách tự lặp `process()` bên trong.
+
+## Luồng hoạt động tổng thể
+
+```mermaid
+flowchart TD
+    A[ESP32 khởi động / tạo object] --> B[Ứng dụng chọn API]
+
+    B -->|connectSaved| C[ensureCredentialCache]
+    B -->|autoConnect| D[connectSaved]
+    B -->|startConfigPortal / Async / On-Demand trigger| P[openPortal]
+
+    C --> E{Credential hợp lệ?}
+    E -- Không --> F[Trả false; có thể schedule recovery nếu lỗi NVS tạm thời]
+    E -- Có --> G[Blocking STA connect với credential đã lưu]
+    G --> H{Success?}
+    H -- Có --> I[State = Connected]
+    H -- Không --> J{Đã schedule saved recovery?}
+    J -- Có --> AH
+    J -- Không --> JO[Trả false; offline/Failed]
+
+    D --> K{connectSaved success?}
+    K -- Có --> I
+    K -- Không --> P
+
+    P --> Q[WIFI_AP_STA + SoftAP + DNS + WebServer]
+    Q --> R[State = Portal]
+    R --> RA{Portal timeout hoặc stop?}
+    RA -- Có --> AE
+    RA -- Không --> S[Async scan hoặc nhập SSID thủ công]
+    S --> T[POST /save]
+    T --> U[Giữ candidate trong RAM, chờ 350 ms]
+    U --> V[Non-blocking STA candidate: Settling -> Config -> WiFi.begin]
+    V --> W{Kết nối?}
+
+    W -- Thành công --> X[Ghi cred_blob, read-back + CRC]
+    X --> Y{Save thành công?}
+    Y -- Có --> Z[Cập nhật cache, callbacks, stop Portal]
+    Z --> I
+    Y -- Không --> AA[Disconnect candidate, giữ Portal]
+
+    W -- Terminal auth fail --> AA
+    W -- Timeout --> AB{Còn retry Portal?}
+    AB -- Có --> AC[Backoff bằng millis rồi thử lại]
+    AC --> V
+    AB -- Không --> AA
+
+    AA --> R
+    AE[Cleanup HTTP/DNS/scan/SoftAP]
+    AE --> AF{STA còn connected?}
+    AF -- Có --> I
+    AF -- Không --> AG{Auto Reconnect bật và credential cũ hợp lệ/có thể đọc lại?}
+    AG -- Có --> AH[Schedule saved recovery, State = Connecting]
+    AG -- Không --> AI[Timeout -> Failed; stop chủ động -> Idle]
+
+    I --> AJ[Wi-Fi event callback chỉ set atomic bits]
+    AJ --> AK[processWiFiEvents]
+    AK --> AL{Mất STA khi không có owner?}
+    AL -- Không --> I
+    AL -- Có --> AM{Auto Reconnect bật và Portal inactive?}
+    AM -- Không --> AN[Không reconnect tự động]
+    AM -- Có --> AH
+
+    AH --> AO[processAutoReconnect]
+    AO --> AP[WIFI_STA, beginSTAConnection owner Reconnect]
+    AP --> AQ{Success trước timeout?}
+    AQ -- Có --> I
+    AQ -- Không --> AR{Còn retry trong burst?}
+    AR -- Có --> AS[Exponential backoff]
+    AS --> AO
+    AR -- Không --> AT[Cooldown = max retry interval]
+    AT --> AO
 ```
 
+### Các điểm cần hiểu đúng
+
+- Constructor **không tự động** đọc NVS, kết nối STA hoặc mở Portal; mọi luồng bắt đầu từ API mà ứng dụng gọi.
+- Chỉ `autoConnect()` tự chuyển từ `connectSaved()` thất bại sang **blocking Config Portal**. `connectSaved()` đơn lẻ không tự mở Portal; ví dụ On-Demand có thể giữ thiết bị offline cho tới khi người dùng kích hoạt Portal.
+- Config Portal không bắt buộc phải chọn SSID từ kết quả scan: Advanced Wi-Fi Setting có thể gửi hidden/unlisted SSID qua cùng `POST /save`.
+- Candidate credential chỉ được ghi vào NVS sau khi STA đã kết nối. Nếu lưu/read-back/CRC thất bại, candidate bị ngắt và Portal vẫn được giữ.
+- Khi Portal timeout/stop trong lúc STA offline, thư viện chỉ phục hồi Wi-Fi cũ khi Auto Reconnect bật và credential cũ còn hợp lệ hoặc có thể đọc lại. Nếu không, timeout kết thúc ở `Failed`, còn stop chủ động kết thúc ở `Idle`.
+- Auto Reconnect chạy trong `process()` và dùng retry hữu hạn + exponential backoff + cooldown; Arduino core Auto Reconnect được tắt để tránh hai luồng reconnect cạnh tranh.

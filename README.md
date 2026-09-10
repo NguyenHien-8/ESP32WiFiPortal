@@ -1,7 +1,5 @@
 # ESP32WiFiPortal 2.1.1
 
-ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
-
 <p align="center">
   <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="23%">
   <img src="docs/image/TiNiHi2.jpg" alt="ESP32WiFiPortal interface 2" width="23%">
