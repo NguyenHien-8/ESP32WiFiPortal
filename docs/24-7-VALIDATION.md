@@ -62,14 +62,3 @@ scenarios:
 
 The sketch emits `SOAK_72H_DURATION_REACHED` when duration alone is met. This is
 not an automatic PASS; the complete scenario log still needs review.
-
-## Test Result
-
-| Verification | Result |
-|---|---:|
-| Host test `/W4` | 6/6 pass |
-| Stress test | 600/600 pass |
-| Portal lifecycle | 50,000-cycle pass |
-| AddressSanitizer | 6/6 pass |
-| JavaScript syntax | 2/2 block pass |
-| Arduino-ESP32 3.3.11 | 8 target × 3 passes |
