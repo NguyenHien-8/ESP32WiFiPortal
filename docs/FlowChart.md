@@ -29,7 +29,7 @@ hình STA không đọc hoặc thay đổi Portal IP của SoftAP.
 flowchart TD
     A[Ứng dụng khởi động] --> B{Có gọi setPortalIP?}
     B -- Không --> C[Dùng mặc định 192.168.4.1/24]
-    B -- Có --> D{IP private, gateway và subnet hợp lệ?}
+    B -- Có --> D{IP và gateway là unicast host cùng subnet /24 đến /28?}
     D -- Không --> E[Trả false và ghi lastError]
     D -- Có --> F[Lưu cấu hình Portal IP trong object]
     C --> G[connectSaved hoặc autoConnect]
@@ -63,16 +63,24 @@ flowchart TD
     E -- Có --> F[Khởi động SoftAP]
     F --> G{SoftAP thành công?}
     G -- Không --> X
-    G -- Có --> H[Khởi động WebServer cổng 80]
-    H --> I[Khởi động wildcard DNS cổng 53]
-    I --> J{DNS thành công?}
-    J -- Không --> X
-    J -- Có --> K[State = Portal và gọi onPortalStarted]
+    G -- Có --> H[Đọc lại SoftAP IP và subnet runtime]
+    H --> I{Khớp cấu hình yêu cầu?}
+    I -- Không --> X
+    I -- Có --> J[Khởi động WebServer cổng 80]
+    J --> K[Khởi động wildcard DNS cổng 53]
+    K --> L{DNS thành công?}
+    L -- Không --> X
+    L -- Có --> M[State = Portal và gọi onPortalStarted]
 ```
 
 Portal IP được giữ cố định trong suốt phiên đang chạy. `setPortalIP()` trả
 `false` nếu được gọi khi Portal còn active, nhờ đó SoftAP, DNS và HTTP redirect
 luôn dùng cùng một địa chỉ.
+
+Validator chấp nhận unicast Class A/B/C hợp lệ nhưng dùng CIDR `/24` đến `/28`
+cho DHCP SoftAP; không suy ra classful `/8` hoặc `/16`. RFC 1918 vẫn được khuyến
+nghị để tránh xung đột route. `200.5.29.8/24` được hỗ trợ cho SoftAP cục bộ nhưng
+không thay thế default an toàn `192.168.4.1/24`.
 
 ## Wi-Fi scan non-blocking trong Portal
 

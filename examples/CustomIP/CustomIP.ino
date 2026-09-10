@@ -15,10 +15,11 @@ ESP32WiFiPortal wifiPortal;
 void setup() {
   Serial.begin(115200);
 
-  // Must be configured before the portal starts. Only valid private IPv4
-  // host addresses are accepted. Gateway defaults to the same address and
-  // subnet defaults to 255.255.255.0.
-  if (!wifiPortal.setPortalIP(IPAddress(192, 168, 50, 1))) {
+  // Configure before the portal starts. Usable unicast addresses from the
+  // legacy Class A/B/C ranges are accepted; 10.10.0.1, 150.10.20.1, and
+  // 200.5.29.8 are examples. The one-argument overload uses the same address
+  // as gateway and a /24 subnet.
+  if (!wifiPortal.setPortalIP(IPAddress(200, 5, 29, 8))) {
     Serial.println(wifiPortal.lastError());
     return;
   }

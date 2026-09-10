@@ -13,7 +13,7 @@ ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 
 - SoftAP captive portal with DNS redirection
 - Private default portal address: `192.168.4.1`
-- Configurable portal address through `setPortalIP(...)`
+- Configurable usable-unicast portal address through `setPortalIP(...)`
 - Optional static STA IPv4 address, gateway, subnet, and two DNS servers
 - Lightweight `WiFi.onEvent()` tracking with disconnect reasons
 - Library-managed auto reconnect with bounded retry bursts and capped backoff
@@ -57,13 +57,14 @@ configured address before the portal starts.
 Configure the portal before starting it:
 
 ```cpp
-if (!portal.setPortalIP(IPAddress(192, 168, 50, 1))) {
+if (!portal.setPortalIP(IPAddress(200, 5, 29, 8))) {
   Serial.println(portal.lastError());
 }
 ```
 
 The one-argument overload uses the local IP as gateway and a
-`255.255.255.0` subnet. An explicit network can also be supplied:
+`255.255.255.0` (`/24`) subnet, so the example is available at
+`http://200.5.29.8/`. An explicit network can also be supplied:
 
 ```cpp
 portal.setPortalIP(
@@ -72,9 +73,24 @@ portal.setPortalIP(
     IPAddress(255, 255, 255, 0));
 ```
 
-Only usable RFC 1918 host addresses are accepted. The address and gateway must
-belong to the same valid subnet. The configuration cannot be changed while the
-portal is active.
+Portal addresses are not limited to RFC 1918. Usable unicast addresses in the
+legacy Class A, B, and C ranges are accepted, for example `10.10.0.1/24`,
+`150.10.20.1/24`, and `200.5.29.8/24`. Class A/B/C describes only the legacy
+address ranges; the actual network uses CIDR, and the library never infers a
+`/8` or `/16` mask from the first octet.
+
+The local IP and gateway must be usable host addresses in the same contiguous
+subnet; zero/`0.x.x.x`, loopback, multicast/reserved, network, and broadcast
+addresses are rejected. Portal subnets are restricted to `/24` through `/28`,
+matching the DHCP range supported by current Arduino-ESP32 SoftAP cores. The
+configuration cannot be changed while the portal is active. After
+`WiFi.softAPConfig()` succeeds, the library reads back the runtime SoftAP IP and
+subnet before starting DNS and HTTP; a mismatch is cleaned up and reported.
+
+Prefer a private RFC 1918 address in deployed products to avoid routing
+collisions. `200.5.29.8` looks public and is globally routable outside the local
+SoftAP; it is supported for local Portal use and testing, but is deliberately
+not the default. The safe, source-compatible default remains `192.168.4.1/24`.
 
 ## Static STA IP and DNS
 
@@ -218,6 +234,8 @@ bool eraseCredentials(bool disconnect = true);
 - Existing public APIs remain source-compatible.
 - The default SoftAP address changed from `200.5.29.8` to `192.168.4.1`.
 - `setPortalIP(...)` is additive; existing sketches need no source changes.
+- Portal IPs may use any valid unicast Class A/B/C address, while SoftAP DHCP
+  subnets are explicitly limited to `/24` through `/28`.
 - The default connection retry count is zero. Auto Reconnect remains enabled by
   default, but now uses the bounded library policy instead of an independent
   core reconnect loop.
