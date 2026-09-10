@@ -2,8 +2,8 @@
  * @file CustomIP.ino
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief Example sketch demonstrating the usage of ESP32WiFiPortal library with custom portal IP address.
- * @version 1.1.1
- * @date 2026-08-31
+ * @version 2.1.1
+ * @date 2026-09-10
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
@@ -19,6 +19,13 @@ void setup() {
   // legacy Class A/B/C ranges are accepted; 10.10.0.1, 150.10.20.1, and
   // 200.5.29.8 are examples. The one-argument overload uses the same address
   // as gateway and a /24 subnet.
+  // ---------------------------------------------------------
+  // Configure Captive Portal IP
+  // Portal IP : 200.5.29.8
+  // Gateway   : 200.5.29.8
+  // Subnet    : 255.255.255.0 (/24)
+  //
+  // ---------------------------------------------------------
   if (!wifiPortal.setPortalIP(IPAddress(200, 5, 29, 8))) {
     Serial.println(wifiPortal.lastError());
     return;

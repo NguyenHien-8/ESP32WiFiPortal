@@ -2,8 +2,8 @@
  * @file ESP32WiFiPortal.h
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library header
- * @version 1.1.1
- * @date 2026-08-31
+ * @version 2.1.1
+ * @date 2026-09-10
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
@@ -44,6 +44,7 @@ public:
   ESP32WiFiPortal& operator=(const ESP32WiFiPortal&) = delete;
 
   // Connect using credentials stored by this library in ESP32 NVS.
+  // timeoutMs == 0 is normalized to the finite 15000 ms default.
   bool connectSaved(uint32_t timeoutMs = 15000);
 
   // Convenience startup: try saved Wi-Fi, then optionally open a blocking portal.
@@ -124,6 +125,26 @@ public:
   uint8_t lastDisconnectReason() const;
 
 private:
+#if defined(ESP32WIFIPORTAL_ENABLE_TEST_ACCESS)
+  // Host tests exercise the exact private implementation used at runtime.
+  friend struct ESP32WiFiPortalTestAccess;
+#endif
+
+  enum class PortalNetworkValidationResult : uint8_t {
+    Valid,
+    InvalidLocalIP,
+    InvalidGateway,
+    InvalidSubnetMask,
+    UnsupportedSubnet,
+    DifferentSubnet,
+    LocalIsNetworkAddress,
+    LocalIsBroadcastAddress,
+    GatewayIsNetworkAddress,
+    GatewayIsBroadcastAddress,
+    LocalConflictsWithDHCPLease,
+    GatewayConflictsWithDHCPLease
+  };
+
   enum class ConnectionOwner : uint8_t {
     None,
     Blocking,
@@ -144,6 +165,14 @@ private:
     Failed
   };
 
+  enum class CredentialCacheStatus : uint8_t {
+    Unknown,
+    Valid,
+    NotFound,
+    Unavailable,
+    Corrupt
+  };
+
   struct ScanNetworkIdentity {
     uint32_t hash;
     int index;
@@ -152,13 +181,164 @@ private:
   static constexpr uint16_t kDnsPort = 53;
   static constexpr uint16_t kHttpPort = 80;
   static constexpr const char* kPrefsNamespace = "ewp_wifi";
+  static constexpr const char* kPrefsCredential = "cred_blob";
   static constexpr const char* kPrefsSSID = "ssid";
   static constexpr const char* kPrefsPassword = "pass";
+  static constexpr uint32_t kCredentialMagic = 0x43505745UL;  // "EWPC"
+  static constexpr uint16_t kCredentialVersion = 1;
+  static constexpr size_t kCredentialSSIDCapacity = 33;
+  static constexpr size_t kCredentialPasswordCapacity = 65;
+  static constexpr size_t kCredentialSSIDOffset = 10;
+  static constexpr size_t kCredentialPasswordOffset =
+      kCredentialSSIDOffset + kCredentialSSIDCapacity;
+  static constexpr size_t kCredentialCRCOffset =
+      kCredentialPasswordOffset + kCredentialPasswordCapacity;
+  static constexpr size_t kCredentialRecordSize = kCredentialCRCOffset + 4;
+  static constexpr uint32_t kDefaultConnectTimeoutMs = 15000;
+  static_assert(kCredentialRecordSize == 112,
+                "Credential record layout changed unexpectedly");
   static constexpr uint32_t kEventSTAConnected = 1UL << 0;
   static constexpr uint32_t kEventSTAGotIP = 1UL << 1;
   static constexpr uint32_t kEventSTADisconnected = 1UL << 2;
   static constexpr uint32_t kSTADisconnectSettleMs = 20;
   static constexpr uint32_t kScanTimeoutMs = 15000;
+
+  // Allocation-free IPv4 helpers live in the class so Portal and STA policy
+  // share only their low-level primitives. Definitions inside the class are
+  // implicitly inline, making this header safe in multiple translation units.
+  static inline uint32_t ipv4ToUint32(const IPAddress& address) {
+    return (static_cast<uint32_t>(address[0]) << 24) |
+           (static_cast<uint32_t>(address[1]) << 16) |
+           (static_cast<uint32_t>(address[2]) << 8) |
+           static_cast<uint32_t>(address[3]);
+  }
+
+  static inline bool isUsableUnicastIPv4(uint32_t address) {
+    const uint8_t firstOctet = static_cast<uint8_t>(address >> 24);
+    return address != 0 && address != 0xFFFFFFFFUL && firstOctet != 0 &&
+           firstOctet != 127 && firstOctet < 224;
+  }
+
+  static inline bool isContiguousSubnetMask(uint32_t mask) {
+    if (mask == 0 || mask == 0xFFFFFFFFUL) return false;
+    const uint32_t hostMask = ~mask;
+    return (hostMask & (hostMask + 1UL)) == 0;
+  }
+
+  static inline uint8_t subnetPrefixLength(uint32_t mask) {
+    uint8_t prefixLength = 0;
+    while ((mask & 0x80000000UL) != 0) {
+      ++prefixLength;
+      mask <<= 1;
+    }
+    return prefixLength;
+  }
+
+  static inline bool isSameSubnet(uint32_t first,
+                                  uint32_t second,
+                                  uint32_t mask) {
+    return (first & mask) == (second & mask);
+  }
+
+  static inline uint32_t networkAddress(uint32_t address, uint32_t mask) {
+    return address & mask;
+  }
+
+  static inline uint32_t broadcastAddress(uint32_t address, uint32_t mask) {
+    return networkAddress(address, mask) | ~mask;
+  }
+
+  static inline uint32_t defaultDHCPLeaseStart(uint32_t local,
+                                               uint32_t mask) {
+    const uint32_t hostMask = ~mask;
+    const uint32_t candidate = local + 1UL;
+    // Arduino-ESP32 keeps eleven inclusive addresses available to its SoftAP
+    // DHCP server and moves an overflowing default range to network + 1.
+    return ((candidate & hostMask) >= hostMask - 10UL)
+               ? networkAddress(local, mask) + 1UL
+               : candidate;
+  }
+
+  static inline bool isInInclusiveRange(uint32_t address,
+                                        uint32_t first,
+                                        uint32_t last) {
+    return address >= first && address <= last;
+  }
+
+  static inline PortalNetworkValidationResult validatePortalNetwork(
+      uint32_t local,
+      uint32_t gateway,
+      uint32_t mask) {
+    if (!isUsableUnicastIPv4(local)) {
+      return PortalNetworkValidationResult::InvalidLocalIP;
+    }
+    if (!isUsableUnicastIPv4(gateway)) {
+      return PortalNetworkValidationResult::InvalidGateway;
+    }
+    if (!isContiguousSubnetMask(mask)) {
+      return PortalNetworkValidationResult::InvalidSubnetMask;
+    }
+
+    const uint8_t prefixLength = subnetPrefixLength(mask);
+    if (prefixLength < 24 || prefixLength > 28) {
+      return PortalNetworkValidationResult::UnsupportedSubnet;
+    }
+    if (!isSameSubnet(local, gateway, mask)) {
+      return PortalNetworkValidationResult::DifferentSubnet;
+    }
+
+    const uint32_t network = networkAddress(local, mask);
+    const uint32_t broadcast = broadcastAddress(local, mask);
+    if (local == network) {
+      return PortalNetworkValidationResult::LocalIsNetworkAddress;
+    }
+    if (local == broadcast) {
+      return PortalNetworkValidationResult::LocalIsBroadcastAddress;
+    }
+    if (gateway == network) {
+      return PortalNetworkValidationResult::GatewayIsNetworkAddress;
+    }
+    if (gateway == broadcast) {
+      return PortalNetworkValidationResult::GatewayIsBroadcastAddress;
+    }
+
+    // Match the default lease-range selection in Arduino-ESP32 3.x. This
+    // prevents setPortalIP() from accepting a host/gateway that AP.config()
+    // would later reject because it overlaps the DHCP pool.
+    const uint32_t leaseStart = defaultDHCPLeaseStart(local, mask);
+    const uint32_t leaseEnd = leaseStart + 10UL;
+    if (isInInclusiveRange(local, leaseStart, leaseEnd)) {
+      return PortalNetworkValidationResult::LocalConflictsWithDHCPLease;
+    }
+    if (isInInclusiveRange(gateway, leaseStart, leaseEnd)) {
+      return PortalNetworkValidationResult::GatewayConflictsWithDHCPLease;
+    }
+
+    return PortalNetworkValidationResult::Valid;
+  }
+
+  // STA static addressing intentionally has no SoftAP /24.../28 restriction.
+  static inline bool isValidSTANetwork(uint32_t local,
+                                       uint32_t gateway,
+                                       uint32_t mask) {
+    if (!isUsableUnicastIPv4(local) ||
+        !isUsableUnicastIPv4(gateway) ||
+        !isContiguousSubnetMask(mask) ||
+        !isSameSubnet(local, gateway, mask)) {
+      return false;
+    }
+    const uint32_t network = networkAddress(local, mask);
+    const uint32_t broadcast = broadcastAddress(local, mask);
+    return local != network && local != broadcast && gateway != network &&
+           gateway != broadcast;
+  }
+
+  static inline bool isValidDNSAddress(uint32_t address) {
+    return address == 0 || isUsableUnicastIPv4(address);
+  }
+
+  static const char* portalNetworkValidationMessage(
+      PortalNetworkValidationResult result);
 
   bool openPortal(const char* apSSID, const char* apPassword, uint32_t portalTimeoutMs);
   bool failPortalStart(const char* message);
@@ -191,6 +371,28 @@ private:
   uint32_t retryDelay(uint8_t retryNumber) const;
   bool saveCredentials(const String& ssid, const String& password);
   bool ensureCredentialCache();
+  static bool validSTACredentials(const String& ssid,
+                                  const String& password);
+  static uint32_t credentialCRC32(const uint8_t* data, size_t length);
+  static bool serializeCredentialRecord(const String& ssid,
+                                        const String& password,
+                                        uint8_t* record,
+                                        size_t recordSize);
+  static bool deserializeCredentialRecord(const uint8_t* record,
+                                          size_t recordSize,
+                                          String& ssid,
+                                          String& password);
+  static void secureClear(void* data, size_t length);
+  CredentialCacheStatus readCredentialBlob(Preferences& prefs,
+                                           String& ssid,
+                                           String& password);
+  CredentialCacheStatus readLegacyCredentials(Preferences& prefs,
+                                               String& ssid,
+                                               String& password);
+  bool writeCredentialRecord(Preferences& prefs,
+                             const String& ssid,
+                             const String& password);
+  void clearCredentialCache(CredentialCacheStatus status);
   bool validAPPassword(const char* password) const;
   bool portalTimedOut() const;
   bool isCredentialFailureReason(uint8_t reason) const;
@@ -211,7 +413,7 @@ private:
   bool _attemptTerminalFailure = false;
   bool _staDisconnected = false;
 
-  uint32_t _connectTimeoutMs = 15000;
+  uint32_t _connectTimeoutMs = kDefaultConnectTimeoutMs;
   uint32_t _portalTimeoutMs = 0;
   uint32_t _portalStartedAt = 0;
   uint32_t _connectPendingAt = 0;
@@ -258,8 +460,8 @@ private:
   String _pendingPassword;
   String _savedSSID;
   String _savedPassword;
-  bool _credentialCacheLoaded = false;
-  bool _credentialCacheValid = false;
+  CredentialCacheStatus _credentialCacheStatus =
+      CredentialCacheStatus::Unknown;
 
   String _responseBuffer;
   String _scanSSID;

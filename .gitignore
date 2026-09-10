@@ -1,8 +1,30 @@
 .pio/
-.vscode/
-.idea/
-build/
 *.bin
 *.elf
 *.map
+
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+Testing/
+
+# Test executables
+*.exe
+*.out
+
+# Object files
+*.o
+*.obj
+
+# IDE
+.vscode/
+.idea/
+
+# OS
 .DS_Store
+Thumbs.db

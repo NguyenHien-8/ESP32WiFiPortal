@@ -2,8 +2,8 @@
  * @file OnDemandFromSerialMonitor.ino
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief Open the ESP32 Wi-Fi Config Portal on demand from Serial Monitor.
- * @version 1.1.1
- * @date 2026-08-31
+ * @version 2.1.1
+ * @date 2026-09-10
  *
  * Type PORTAL in Serial Monitor and press Enter to open the Config Portal.
  * Use "Newline" or "Both NL & CR" as the Serial Monitor line ending.

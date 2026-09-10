@@ -1,12 +1,10 @@
-# ESP32WiFiPortal 1.1.1
-
-ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
+# ESP32WiFiPortal 2.1.1
 
 <p align="center">
-  <img src="docs/image/image1.png" alt="ESP32WiFiPortal interface 1" width="23%">
-  <img src="docs/image/image2.png" alt="ESP32WiFiPortal interface 2" width="23%">
-  <img src="docs/image/image3.png" alt="ESP32WiFiPortal interface 3" width="23%">
-  <img src="docs/image/image4.png" alt="ESP32WiFiPortal interface 4" width="24.5%">
+  <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="23%">
+  <img src="docs/image/TiNiHi2.jpg" alt="ESP32WiFiPortal interface 2" width="23%">
+  <img src="docs/image/TiNiHi3.jpg" alt="ESP32WiFiPortal interface 3" width="23%">
+  <img src="docs/image/TiNiHi4.jpg" alt="ESP32WiFiPortal interface 4" width="23%">
 </p>
 
 ## Features
@@ -18,7 +16,9 @@ ESP32-only Wi-Fi provisioning library for Arduino-ESP32.
 - Lightweight `WiFi.onEvent()` tracking with disconnect reasons
 - Library-managed auto reconnect with bounded retry bursts and capped backoff
 - Automatic recovery of the last saved Wi-Fi after an unsuccessful Portal session
-- Asynchronous Wi-Fi scanning and Preferences/NVS credential storage
+- Asynchronous Wi-Fi scanning and CRC-checked single-record NVS credentials
+- Power-loss-safe migration from the legacy `ssid`/`pass` key pair
+- Advanced manual entry for hidden or unlisted Wi-Fi networks
 - Blocking, non-blocking, and on-demand portal modes
 - Safe cancellation of pending STA attempts when the portal stops or times out
 - No third-party runtime dependency
@@ -83,7 +83,9 @@ The local IP and gateway must be usable host addresses in the same contiguous
 subnet; zero/`0.x.x.x`, loopback, multicast/reserved, network, and broadcast
 addresses are rejected. Portal subnets are restricted to `/24` through `/28`,
 matching the DHCP range supported by current Arduino-ESP32 SoftAP cores. The
-configuration cannot be changed while the portal is active. After
+Portal IP and gateway also cannot overlap the default lease pool that the core
+derives from the selected Portal IP. The configuration cannot be changed while
+the portal is active. After
 `WiFi.softAPConfig()` succeeds, the library reads back the runtime SoftAP IP and
 subnet before starting DNS and HTTP; a mismatch is cleaned up and reported.
 
@@ -138,6 +140,12 @@ saved unless it connects successfully.
 For safety, the initial interval must be at least 250 ms and the cap at least
 1000 ms.
 
+`setConnectTimeout(0)` and `connectSaved(0)` are normalized to the safe
+15-second default and emit a short log message. Portal, blocking saved, and Auto
+Reconnect attempts therefore never acquire the old infinite-timeout behavior.
+All reconnect deadlines, backoff intervals, and cooldowns use unsigned
+`millis()` subtraction and remain valid across timer wrap-around.
+
 Auto Reconnect is enabled by default to preserve normal Arduino-ESP32 behavior;
 use `setAutoReconnect(false)` to disable it. Call `process()` frequently from
 `loop()` whenever Auto Reconnect is enabled. The
@@ -151,6 +159,41 @@ start cancels that schedule before taking ownership of the STA interface.
 Short Serial logs are enabled by default for Portal, Connect, Got IP, Disconnect,
 Retry, and Reconnect transitions. Passwords are never logged. Use
 `setLogging(false)` when the application needs silent operation.
+
+## Credential persistence and migration
+
+Credentials are stored as one fixed-size `cred_blob` record in the
+`ewp_wifi` Preferences namespace. The record contains a magic value, format
+version, encoded size, explicit SSID/password byte lengths, fixed-capacity
+payloads, and a CRC32 (IEEE polynomial `0xEDB88320`). A save uses one
+`putBytes()` call, then reads the complete record back and validates its metadata,
+lengths, value, and CRC before the in-memory reconnect cache is changed.
+
+On first use after upgrading, a valid legacy `ssid`/`pass` pair is converted to
+the blob. The legacy keys are removed only after verified read-back. If power is
+lost during that write, the complete legacy pair remains the recovery source;
+if a blob is corrupt and no complete legacy pair exists, it is rejected and is
+never passed to `WiFi.begin()`. `eraseCredentials()` removes the blob and both
+legacy keys.
+
+CRC detects accidental corruption and interrupted writes; it is not encryption,
+authentication, or tamper protection. Preferences/NVS access control and device
+physical security remain application/deployment responsibilities.
+
+## Captive portal UI
+
+The normal scan list remains the default view. The underlined
+**Advanced Wi-Fi Setting** link directly below the portal brand opens a manual
+form for hidden or unlisted networks and includes a keyboard-accessible Back
+link. SSIDs are submitted exactly as entered, including leading/trailing spaces,
+and are validated as 1-32 bytes. Passwords must be empty for an open network or
+8-63 bytes for a secured network. The password is sent only by POST to `/save`,
+is never placed in a URL or browser storage, and the existing connection state
+machine prevents double submission.
+
+The scan progress indicator uses a fixed-width translated bar with linear
+infinite motion. It never scales or changes shape, and it becomes static when
+the browser requests reduced motion.
 
 ## Cooperative runtime
 
@@ -229,40 +272,28 @@ uint8_t lastDisconnectReason() const;
 bool eraseCredentials(bool disconnect = true);
 ```
 
-## Compatibility notes for 1.1.1
+## Changes in 2.1.1
 
 - Existing public APIs remain source-compatible.
-- The default SoftAP address changed from `200.5.29.8` to `192.168.4.1`.
-- `setPortalIP(...)` is additive; existing sketches need no source changes.
+- The default SoftAP address remains `192.168.4.1/24`.
 - Portal IPs may use any valid unicast Class A/B/C address, while SoftAP DHCP
   subnets are explicitly limited to `/24` through `/28`.
+- Portal validation mirrors the target core's default DHCP lease placement, so
+  an IP or gateway inside that lease pool is rejected before Portal startup.
+- Allocation-free IPv4 validation is now encapsulated by private, inline helpers
+  in the core `ESP32WiFiPortal` class; applications still include only
+  `ESP32WiFiPortal.h`.
 - The default connection retry count is zero. Auto Reconnect remains enabled by
   default, but now uses the bounded library policy instead of an independent
   core reconnect loop.
 - The captive portal remains HTTP on the isolated setup AP. Use a strong AP
   password and do not expose the setup network to untrusted clients.
-
-## Repository layout
-
-```text
-ESP32WiFiPortal/
-├── src/
-│   ├── ESP32WiFiPortal.cpp
-│   ├── ESP32WiFiPortal.h
-│   └── PortalPage.h
-├── examples/
-│   ├── Basic/
-│   ├── AdvancedSTA/
-│   ├── CustomIP/
-│   ├── NonBlocking/
-│   ├── OnDemand/
-│   └── Test/
-├── docs/
-│   ├── ARCHITECTURE.md
-│   └── FlowChart.md
-├── library.properties
-└── library.json
-```
+- Credentials now use one versioned, CRC-checked blob with automatic legacy-key
+  migration and verified read-back before cache commit.
+- `setConnectTimeout(0)` now selects 15000 ms instead of an infinite Portal or
+  Auto Reconnect attempt.
+- The Portal includes Advanced manual SSID/password entry without trimming SSID
+  whitespace.
 
 ## License
 

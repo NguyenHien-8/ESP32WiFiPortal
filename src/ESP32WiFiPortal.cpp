@@ -2,85 +2,19 @@
  * @file ESP32WiFiPortal.cpp
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library implementation
- * @version 1.1.1
- * @date 2026-08-31
+ * @version 2.1.1
+ * @date 2026-09-10
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
 
 #include "ESP32WiFiPortal.h"
 #include "PortalPage.h"
-#include "PortalNetworkValidation.h"
 
 #include <esp_wifi.h>
 #include <new>
 
 namespace {
-uint32_t ipToUint32(const IPAddress& address) {
-  return (static_cast<uint32_t>(address[0]) << 24) |
-         (static_cast<uint32_t>(address[1]) << 16) |
-         (static_cast<uint32_t>(address[2]) << 8) |
-         static_cast<uint32_t>(address[3]);
-}
-
-bool isUsableUnicastIPv4(const IPAddress& address) {
-  return ewp_internal::isUsableUnicastIPv4(ipToUint32(address));
-}
-
-bool isValidIPv4Network(const IPAddress& localIP,
-                        const IPAddress& gateway,
-                        const IPAddress& subnet) {
-  if (!isUsableUnicastIPv4(localIP) || !isUsableUnicastIPv4(gateway)) {
-    return false;
-  }
-
-  const uint32_t local = ipToUint32(localIP);
-  const uint32_t gatewayValue = ipToUint32(gateway);
-  const uint32_t mask = ipToUint32(subnet);
-  if (mask == 0 || mask == 0xFFFFFFFFUL) return false;
-
-  const uint32_t hostMask = ~mask;
-  if ((hostMask & (hostMask + 1UL)) != 0) return false;
-  if ((local & mask) != (gatewayValue & mask)) return false;
-
-  const uint32_t localHost = local & hostMask;
-  const uint32_t gatewayHost = gatewayValue & hostMask;
-  return localHost != 0 && localHost != hostMask &&
-         gatewayHost != 0 && gatewayHost != hostMask;
-}
-
-const char* portalNetworkValidationMessage(
-    ewp_internal::PortalNetworkValidationResult result) {
-  using ewp_internal::PortalNetworkValidationResult;
-  switch (result) {
-    case PortalNetworkValidationResult::InvalidLocalIP:
-      return "Portal IP is not a usable unicast IPv4 address";
-    case PortalNetworkValidationResult::InvalidGateway:
-      return "Portal gateway is not a usable unicast IPv4 address";
-    case PortalNetworkValidationResult::InvalidSubnetMask:
-      return "Portal subnet mask is invalid or non-contiguous";
-    case PortalNetworkValidationResult::UnsupportedSubnet:
-      return "Portal subnet must be between /24 and /28 for SoftAP DHCP";
-    case PortalNetworkValidationResult::DifferentSubnet:
-      return "Portal IP and gateway must be in the same subnet";
-    case PortalNetworkValidationResult::LocalIsNetworkAddress:
-      return "Portal IP cannot be the subnet network address";
-    case PortalNetworkValidationResult::LocalIsBroadcastAddress:
-      return "Portal IP cannot be the subnet broadcast address";
-    case PortalNetworkValidationResult::GatewayIsNetworkAddress:
-      return "Portal gateway cannot be the subnet network address";
-    case PortalNetworkValidationResult::GatewayIsBroadcastAddress:
-      return "Portal gateway cannot be the subnet broadcast address";
-    case PortalNetworkValidationResult::Valid:
-      return "";
-  }
-  return "Portal IPv4 configuration is invalid";
-}
-
-bool isValidDNS(const IPAddress& address) {
-  return ipToUint32(address) == 0 || isUsableUnicastIPv4(address);
-}
-
 void appendJsonEscaped(String& output, const String& value) {
   static const char kHex[] = "0123456789abcdef";
   for (size_t i = 0; i < value.length(); ++i) {
@@ -126,8 +60,49 @@ uint32_t hashSSID(const String& ssid) {
 constexpr uint16_t ESP32WiFiPortal::kDnsPort;
 constexpr uint16_t ESP32WiFiPortal::kHttpPort;
 constexpr const char* ESP32WiFiPortal::kPrefsNamespace;
+constexpr const char* ESP32WiFiPortal::kPrefsCredential;
 constexpr const char* ESP32WiFiPortal::kPrefsSSID;
 constexpr const char* ESP32WiFiPortal::kPrefsPassword;
+constexpr uint32_t ESP32WiFiPortal::kCredentialMagic;
+constexpr uint16_t ESP32WiFiPortal::kCredentialVersion;
+constexpr size_t ESP32WiFiPortal::kCredentialSSIDCapacity;
+constexpr size_t ESP32WiFiPortal::kCredentialPasswordCapacity;
+constexpr size_t ESP32WiFiPortal::kCredentialSSIDOffset;
+constexpr size_t ESP32WiFiPortal::kCredentialPasswordOffset;
+constexpr size_t ESP32WiFiPortal::kCredentialCRCOffset;
+constexpr size_t ESP32WiFiPortal::kCredentialRecordSize;
+constexpr uint32_t ESP32WiFiPortal::kDefaultConnectTimeoutMs;
+
+const char* ESP32WiFiPortal::portalNetworkValidationMessage(
+    PortalNetworkValidationResult result) {
+  switch (result) {
+    case PortalNetworkValidationResult::InvalidLocalIP:
+      return "Portal IP is not a usable unicast IPv4 address";
+    case PortalNetworkValidationResult::InvalidGateway:
+      return "Portal gateway is not a usable unicast IPv4 address";
+    case PortalNetworkValidationResult::InvalidSubnetMask:
+      return "Portal subnet mask is invalid or non-contiguous";
+    case PortalNetworkValidationResult::UnsupportedSubnet:
+      return "Portal subnet must be between /24 and /28 for SoftAP DHCP";
+    case PortalNetworkValidationResult::DifferentSubnet:
+      return "Portal IP and gateway must be in the same subnet";
+    case PortalNetworkValidationResult::LocalIsNetworkAddress:
+      return "Portal IP cannot be the subnet network address";
+    case PortalNetworkValidationResult::LocalIsBroadcastAddress:
+      return "Portal IP cannot be the subnet broadcast address";
+    case PortalNetworkValidationResult::GatewayIsNetworkAddress:
+      return "Portal gateway cannot be the subnet network address";
+    case PortalNetworkValidationResult::GatewayIsBroadcastAddress:
+      return "Portal gateway cannot be the subnet broadcast address";
+    case PortalNetworkValidationResult::LocalConflictsWithDHCPLease:
+      return "Portal IP conflicts with the SoftAP DHCP lease range";
+    case PortalNetworkValidationResult::GatewayConflictsWithDHCPLease:
+      return "Portal gateway conflicts with the SoftAP DHCP lease range";
+    case PortalNetworkValidationResult::Valid:
+      return "";
+  }
+  return "Portal IPv4 configuration is invalid";
+}
 
 ESP32WiFiPortal::ESP32WiFiPortal()
     : _portalIP(192, 168, 4, 1),
@@ -184,13 +159,16 @@ bool ESP32WiFiPortal::connectSaved(uint32_t timeoutMs) {
   }
 
   if (!ensureCredentialCache()) {
-    if (_credentialCacheLoaded) {
-      setError("No saved Wi-Fi credentials");
-      _state = State::Failed;
-    } else {
+    if (_credentialCacheStatus == CredentialCacheStatus::Unavailable) {
       setError("Saved Wi-Fi credentials are temporarily unavailable");
       _state = State::Failed;
       scheduleAutoReconnect(_maxRetryIntervalMs);
+    } else if (_credentialCacheStatus == CredentialCacheStatus::Corrupt) {
+      setError("Saved Wi-Fi credential record is corrupt");
+      _state = State::Failed;
+    } else {
+      setError("No saved Wi-Fi credentials");
+      _state = State::Failed;
     }
     return false;
   }
@@ -244,6 +222,14 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
     return false;
   }
 
+  const PortalNetworkValidationResult validation = validatePortalNetwork(
+      ipv4ToUint32(_portalIP), ipv4ToUint32(_portalGateway),
+      ipv4ToUint32(_portalSubnet));
+  if (validation != PortalNetworkValidationResult::Valid) {
+    setError(portalNetworkValidationMessage(validation));
+    return false;
+  }
+
   ensureWiFiEventHandler();
   // Load the last known-good credentials before a Portal candidate can use
   // the STA interface. They remain cached until a candidate is proven and
@@ -283,8 +269,8 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
 
   // softAPConfig() can fail incompletely on some core/IDF combinations. Read
   // back the active netif before DNS and HTTP bind to a different address.
-  if (ipToUint32(WiFi.softAPIP()) != ipToUint32(_portalIP) ||
-      ipToUint32(WiFi.softAPSubnetMask()) != ipToUint32(_portalSubnet)) {
+  if (ipv4ToUint32(WiFi.softAPIP()) != ipv4ToUint32(_portalIP) ||
+      ipv4ToUint32(WiFi.softAPSubnetMask()) != ipv4ToUint32(_portalSubnet)) {
     return failPortalStart(
         "SoftAP runtime IP/subnet does not match the portal configuration");
   }
@@ -295,8 +281,10 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   appendIPAddress(_redirectURL, WiFi.softAPIP());
   _redirectURL += '/';
 
-  _portalActive = true;
-  _server.reset(new WebServer(kHttpPort));
+  _server.reset(new (std::nothrow) WebServer(kHttpPort));
+  if (!_server) {
+    return failPortalStart("Unable to allocate captive portal WebServer");
+  }
   configureRoutes();
   _server->begin();
 
@@ -305,6 +293,7 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
     return failPortalStart("Failed to start captive portal DNS");
   }
 
+  _portalActive = true;
   _state = State::Portal;
   if (_loggingEnabled) {
     Serial.print(F("[EWP] Portal started: http://"));
@@ -530,14 +519,12 @@ void ESP32WiFiPortal::handleSave() {
   // creating another pair of short-lived credential Strings.
   _pendingSSID = _server->arg("ssid");
   _pendingPassword = _server->arg("password");
-  _pendingSSID.trim();
 
-  if (_pendingSSID.length() == 0 || _pendingSSID.length() > 32 ||
-      _pendingPassword.length() > 63) {
+  if (!validSTACredentials(_pendingSSID, _pendingPassword)) {
     _pendingSSID.remove(0);
     _pendingPassword.remove(0);
     _server->send(400, "text/plain; charset=utf-8",
-                  "Invalid SSID or password length");
+                  "SSID must be 1-32 bytes; password must be empty or 8-63 bytes");
     return;
   }
 
@@ -645,8 +632,7 @@ void ESP32WiFiPortal::process() {
 
       if (_attemptTerminalFailure) {
         failPendingConnection(true);
-      } else if (_connectTimeoutMs > 0 &&
-                 millis() - _connectAttemptAt >= _connectTimeoutMs) {
+      } else if (millis() - _connectAttemptAt >= _connectTimeoutMs) {
         failPendingConnection(false);
       }
     }
@@ -895,8 +881,7 @@ void ESP32WiFiPortal::processAutoReconnect() {
       return;
     }
 
-    if (_connectTimeoutMs == 0 ||
-        millis() - _connectAttemptAt < _connectTimeoutMs) {
+    if (millis() - _connectAttemptAt < _connectTimeoutMs) {
       return;
     }
 
@@ -919,9 +904,11 @@ void ESP32WiFiPortal::processAutoReconnect() {
   }
 
   if (!ensureCredentialCache()) {
-    if (_credentialCacheLoaded) {
+    if (_credentialCacheStatus != CredentialCacheStatus::Unavailable) {
       _reconnectScheduled = false;
-      setError("Auto reconnect requires saved Wi-Fi credentials");
+      setError(_credentialCacheStatus == CredentialCacheStatus::Corrupt
+                   ? "Auto reconnect rejected a corrupt credential record"
+                   : "Auto reconnect requires saved Wi-Fi credentials");
       _state = State::Failed;
     } else {
       setError("Saved Wi-Fi credentials are temporarily unavailable");
@@ -975,7 +962,10 @@ bool ESP32WiFiPortal::scheduleSavedConnectionRecovery() {
   }
 
   const bool hasCredentials = ensureCredentialCache();
-  if (!hasCredentials && _credentialCacheLoaded) return false;
+  if (!hasCredentials &&
+      _credentialCacheStatus != CredentialCacheStatus::Unavailable) {
+    return false;
+  }
 
   _reconnectRetriesUsed = 0;
   scheduleAutoReconnect(hasCredentials ? _retryIntervalMs
@@ -1024,6 +1014,10 @@ bool ESP32WiFiPortal::connect(uint32_t timeoutMs) {
 
   ensureWiFiEventHandler();
   cancelAutoReconnect(true);
+  if (timeoutMs == 0) {
+    timeoutMs = kDefaultConnectTimeoutMs;
+    log(F("[EWP] Connect timeout 0 normalized to 15000 ms"));
+  }
   _state = State::Connecting;
   _lastError = "";
   uint8_t retriesUsed = 0;
@@ -1048,7 +1042,7 @@ bool ESP32WiFiPortal::connect(uint32_t timeoutMs) {
       }
       if (WiFi.status() == WL_CONNECTED) break;
       if (_attemptTerminalFailure ||
-          (timeoutMs > 0 && millis() - _connectAttemptAt >= timeoutMs)) {
+          millis() - _connectAttemptAt >= timeoutMs) {
         break;
       }
       delay(10);
@@ -1130,49 +1124,303 @@ void ESP32WiFiPortal::stopConfigPortal() {
 }
 
 bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password) {
+  if (!validSTACredentials(ssid, password)) {
+    setError("Invalid Wi-Fi credential length");
+    return false;
+  }
+
   Preferences prefs;
   if (!prefs.begin(kPrefsNamespace, false)) {
     setError("Unable to open NVS namespace");
     return false;
   }
-  const size_t ssidWritten = prefs.putString(kPrefsSSID, ssid);
-  const size_t passwordWritten = prefs.putString(kPrefsPassword, password);
+
+  const bool saved = writeCredentialRecord(prefs, ssid, password);
+  if (saved) {
+    // Legacy keys are kept until the new record has survived an exact
+    // read-back and CRC validation. A reset at any earlier point can safely
+    // retry migration from the complete legacy pair.
+    if (prefs.isKey(kPrefsSSID)) prefs.remove(kPrefsSSID);
+    if (prefs.isKey(kPrefsPassword)) prefs.remove(kPrefsPassword);
+  }
   prefs.end();
-  const bool saved = ssidWritten == ssid.length() &&
-                     (password.length() == 0 ||
-                      passwordWritten == password.length());
+
   if (saved) {
     _savedSSID = ssid;
     _savedPassword = password;
-    _credentialCacheLoaded = true;
-    _credentialCacheValid = true;
-  } else {
-    // A failed multi-key NVS update may be partial. Force the next user of the
-    // cache to re-read storage instead of reconnecting with stale RAM data.
-    _savedSSID.remove(0);
-    _savedPassword.remove(0);
-    _credentialCacheLoaded = false;
-    _credentialCacheValid = false;
+    _credentialCacheStatus = CredentialCacheStatus::Valid;
   }
   return saved;
 }
 
 bool ESP32WiFiPortal::ensureCredentialCache() {
-  if (_credentialCacheLoaded) return _credentialCacheValid;
+  if (_credentialCacheStatus == CredentialCacheStatus::Valid) return true;
+  if (_credentialCacheStatus == CredentialCacheStatus::NotFound ||
+      _credentialCacheStatus == CredentialCacheStatus::Corrupt) {
+    return false;
+  }
 
   Preferences prefs;
-  if (!prefs.begin(kPrefsNamespace, true)) return false;
-  String ssid = prefs.getString(kPrefsSSID, "");
-  String password = prefs.getString(kPrefsPassword, "");
-  prefs.end();
+  // Read-write mode lets Preferences open a fresh namespace, so an empty
+  // device is distinguishable from an NVS-open failure. This path runs only
+  // while the object cache is unresolved, not on every reconnect attempt.
+  if (!prefs.begin(kPrefsNamespace, false)) {
+    clearCredentialCache(CredentialCacheStatus::Unavailable);
+    return false;
+  }
 
-  _savedSSID = std::move(ssid);
-  _savedPassword = std::move(password);
-  _credentialCacheLoaded = true;
-  _credentialCacheValid = _savedSSID.length() > 0 &&
-                          _savedSSID.length() <= 32 &&
-                          _savedPassword.length() <= 63;
-  return _credentialCacheValid;
+  String ssid;
+  String password;
+  const CredentialCacheStatus blobStatus =
+      readCredentialBlob(prefs, ssid, password);
+  const bool staleLegacyKeys =
+      prefs.isKey(kPrefsSSID) || prefs.isKey(kPrefsPassword);
+  if (blobStatus == CredentialCacheStatus::Valid) {
+    // Complete cleanup if power was lost after a verified migration write.
+    if (staleLegacyKeys) {
+      if (prefs.isKey(kPrefsSSID)) prefs.remove(kPrefsSSID);
+      if (prefs.isKey(kPrefsPassword)) prefs.remove(kPrefsPassword);
+    }
+    prefs.end();
+    _savedSSID = std::move(ssid);
+    _savedPassword = std::move(password);
+    _credentialCacheStatus = CredentialCacheStatus::Valid;
+    return true;
+  }
+
+  // A valid legacy pair is also the recovery point for an interrupted first
+  // blob write. A corrupt blob without a complete legacy pair is never used.
+  const CredentialCacheStatus legacyStatus =
+      readLegacyCredentials(prefs, ssid, password);
+
+  if (legacyStatus == CredentialCacheStatus::Valid) {
+    const bool migrated = writeCredentialRecord(prefs, ssid, password);
+    if (migrated) {
+      if (prefs.isKey(kPrefsSSID)) prefs.remove(kPrefsSSID);
+      if (prefs.isKey(kPrefsPassword)) prefs.remove(kPrefsPassword);
+    }
+    prefs.end();
+    if (!migrated) {
+      clearCredentialCache(CredentialCacheStatus::Unavailable);
+      return false;
+    }
+
+    _savedSSID = std::move(ssid);
+    _savedPassword = std::move(password);
+    _credentialCacheStatus = CredentialCacheStatus::Valid;
+    return true;
+  }
+
+  prefs.end();
+  clearCredentialCache(
+      blobStatus == CredentialCacheStatus::Corrupt ||
+              legacyStatus == CredentialCacheStatus::Corrupt
+          ? CredentialCacheStatus::Corrupt
+          : CredentialCacheStatus::NotFound);
+  return false;
+}
+
+bool ESP32WiFiPortal::validSTACredentials(const String& ssid,
+                                          const String& password) {
+  const size_t ssidLength = ssid.length();
+  const size_t passwordLength = password.length();
+  if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
+      (passwordLength > 0 && passwordLength < 8)) {
+    return false;
+  }
+
+  // WiFi.begin() consumes C strings, so embedded NUL bytes cannot be stored as
+  // part of an exact credential value.
+  for (size_t i = 0; i < ssidLength; ++i) {
+    if (ssid[i] == '\0') return false;
+  }
+  for (size_t i = 0; i < passwordLength; ++i) {
+    if (password[i] == '\0') return false;
+  }
+  return true;
+}
+
+uint32_t ESP32WiFiPortal::credentialCRC32(const uint8_t* data,
+                                          size_t length) {
+  uint32_t crc = 0xFFFFFFFFUL;
+  for (size_t i = 0; i < length; ++i) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+      crc = (crc >> 1) ^ ((crc & 1U) ? 0xEDB88320UL : 0UL);
+    }
+  }
+  return crc ^ 0xFFFFFFFFUL;
+}
+
+bool ESP32WiFiPortal::serializeCredentialRecord(const String& ssid,
+                                                const String& password,
+                                                uint8_t* record,
+                                                size_t recordSize) {
+  if (!record || recordSize != kCredentialRecordSize ||
+      !validSTACredentials(ssid, password)) {
+    return false;
+  }
+
+  memset(record, 0, recordSize);
+  record[0] = static_cast<uint8_t>(kCredentialMagic);
+  record[1] = static_cast<uint8_t>(kCredentialMagic >> 8);
+  record[2] = static_cast<uint8_t>(kCredentialMagic >> 16);
+  record[3] = static_cast<uint8_t>(kCredentialMagic >> 24);
+  record[4] = static_cast<uint8_t>(kCredentialVersion);
+  record[5] = static_cast<uint8_t>(kCredentialVersion >> 8);
+  record[6] = static_cast<uint8_t>(kCredentialRecordSize);
+  record[7] = static_cast<uint8_t>(kCredentialRecordSize >> 8);
+  record[8] = static_cast<uint8_t>(ssid.length());
+  record[9] = static_cast<uint8_t>(password.length());
+  memcpy(record + kCredentialSSIDOffset, ssid.c_str(), ssid.length());
+  memcpy(record + kCredentialPasswordOffset, password.c_str(),
+         password.length());
+
+  const uint32_t crc = credentialCRC32(record, kCredentialCRCOffset);
+  record[kCredentialCRCOffset] = static_cast<uint8_t>(crc);
+  record[kCredentialCRCOffset + 1] = static_cast<uint8_t>(crc >> 8);
+  record[kCredentialCRCOffset + 2] = static_cast<uint8_t>(crc >> 16);
+  record[kCredentialCRCOffset + 3] = static_cast<uint8_t>(crc >> 24);
+  return true;
+}
+
+bool ESP32WiFiPortal::deserializeCredentialRecord(const uint8_t* record,
+                                                  size_t recordSize,
+                                                  String& ssid,
+                                                  String& password) {
+  if (!record || recordSize != kCredentialRecordSize) return false;
+
+  const uint32_t magic = static_cast<uint32_t>(record[0]) |
+                         (static_cast<uint32_t>(record[1]) << 8) |
+                         (static_cast<uint32_t>(record[2]) << 16) |
+                         (static_cast<uint32_t>(record[3]) << 24);
+  const uint16_t version = static_cast<uint16_t>(record[4]) |
+                           (static_cast<uint16_t>(record[5]) << 8);
+  const uint16_t encodedSize = static_cast<uint16_t>(record[6]) |
+                               (static_cast<uint16_t>(record[7]) << 8);
+  const uint32_t storedCRC =
+      static_cast<uint32_t>(record[kCredentialCRCOffset]) |
+      (static_cast<uint32_t>(record[kCredentialCRCOffset + 1]) << 8) |
+      (static_cast<uint32_t>(record[kCredentialCRCOffset + 2]) << 16) |
+      (static_cast<uint32_t>(record[kCredentialCRCOffset + 3]) << 24);
+  if (magic != kCredentialMagic || version != kCredentialVersion ||
+      encodedSize != kCredentialRecordSize ||
+      storedCRC != credentialCRC32(record, kCredentialCRCOffset)) {
+    return false;
+  }
+
+  const size_t ssidLength = record[8];
+  const size_t passwordLength = record[9];
+  if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
+      (passwordLength > 0 && passwordLength < 8)) {
+    return false;
+  }
+
+  for (size_t i = 0; i < kCredentialSSIDCapacity; ++i) {
+    if ((i < ssidLength && record[kCredentialSSIDOffset + i] == 0) ||
+        (i >= ssidLength && record[kCredentialSSIDOffset + i] != 0)) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < kCredentialPasswordCapacity; ++i) {
+    if ((i < passwordLength && record[kCredentialPasswordOffset + i] == 0) ||
+        (i >= passwordLength &&
+         record[kCredentialPasswordOffset + i] != 0)) {
+      return false;
+    }
+  }
+
+  char ssidBuffer[kCredentialSSIDCapacity];
+  char passwordBuffer[kCredentialPasswordCapacity];
+  memset(ssidBuffer, 0, sizeof(ssidBuffer));
+  memset(passwordBuffer, 0, sizeof(passwordBuffer));
+  memcpy(ssidBuffer, record + kCredentialSSIDOffset, ssidLength);
+  memcpy(passwordBuffer, record + kCredentialPasswordOffset, passwordLength);
+  ssid = ssidBuffer;
+  password = passwordBuffer;
+  secureClear(ssidBuffer, sizeof(ssidBuffer));
+  secureClear(passwordBuffer, sizeof(passwordBuffer));
+  return validSTACredentials(ssid, password);
+}
+
+void ESP32WiFiPortal::secureClear(void* data, size_t length) {
+  volatile uint8_t* bytes = static_cast<volatile uint8_t*>(data);
+  while (length-- > 0) *bytes++ = 0;
+}
+
+ESP32WiFiPortal::CredentialCacheStatus ESP32WiFiPortal::readCredentialBlob(
+    Preferences& prefs,
+    String& ssid,
+    String& password) {
+  if (!prefs.isKey(kPrefsCredential)) {
+    return CredentialCacheStatus::NotFound;
+  }
+  if (prefs.getBytesLength(kPrefsCredential) != kCredentialRecordSize) {
+    return CredentialCacheStatus::Corrupt;
+  }
+
+  uint8_t record[kCredentialRecordSize];
+  const size_t bytesRead =
+      prefs.getBytes(kPrefsCredential, record, sizeof(record));
+  const bool valid = bytesRead == sizeof(record) &&
+                     deserializeCredentialRecord(record, sizeof(record),
+                                                 ssid, password);
+  secureClear(record, sizeof(record));
+  return valid ? CredentialCacheStatus::Valid
+               : CredentialCacheStatus::Corrupt;
+}
+
+ESP32WiFiPortal::CredentialCacheStatus ESP32WiFiPortal::readLegacyCredentials(
+    Preferences& prefs,
+    String& ssid,
+    String& password) {
+  const bool hasSSID = prefs.isKey(kPrefsSSID);
+  const bool hasPassword = prefs.isKey(kPrefsPassword);
+  if (!hasSSID && !hasPassword) return CredentialCacheStatus::NotFound;
+  if (!hasSSID || !hasPassword) return CredentialCacheStatus::Corrupt;
+
+  ssid = prefs.getString(kPrefsSSID, "");
+  password = prefs.getString(kPrefsPassword, "");
+  return validSTACredentials(ssid, password)
+             ? CredentialCacheStatus::Valid
+             : CredentialCacheStatus::Corrupt;
+}
+
+bool ESP32WiFiPortal::writeCredentialRecord(Preferences& prefs,
+                                            const String& ssid,
+                                            const String& password) {
+  uint8_t record[kCredentialRecordSize];
+  uint8_t readBack[kCredentialRecordSize];
+  if (!serializeCredentialRecord(ssid, password, record, sizeof(record))) {
+    secureClear(record, sizeof(record));
+    secureClear(readBack, sizeof(readBack));
+    return false;
+  }
+
+  const size_t bytesWritten =
+      prefs.putBytes(kPrefsCredential, record, sizeof(record));
+  bool valid = bytesWritten == sizeof(record) &&
+               prefs.getBytesLength(kPrefsCredential) == sizeof(record);
+  String verifiedSSID;
+  String verifiedPassword;
+  if (valid) {
+    const size_t bytesRead =
+        prefs.getBytes(kPrefsCredential, readBack, sizeof(readBack));
+    valid = bytesRead == sizeof(readBack) &&
+            deserializeCredentialRecord(readBack, sizeof(readBack),
+                                        verifiedSSID, verifiedPassword) &&
+            verifiedSSID == ssid && verifiedPassword == password;
+  }
+
+  secureClear(record, sizeof(record));
+  secureClear(readBack, sizeof(readBack));
+  return valid;
+}
+
+void ESP32WiFiPortal::clearCredentialCache(CredentialCacheStatus status) {
+  _savedSSID.remove(0);
+  _savedPassword.remove(0);
+  _credentialCacheStatus = status;
 }
 
 bool ESP32WiFiPortal::hasSavedCredentials() {
@@ -1189,14 +1437,16 @@ bool ESP32WiFiPortal::eraseCredentials(bool disconnect) {
     setError("Unable to open NVS namespace");
     return false;
   }
-  const bool ok = prefs.clear();
+  bool ok = true;
+  if (prefs.isKey(kPrefsCredential)) ok = prefs.remove(kPrefsCredential) && ok;
+  if (prefs.isKey(kPrefsSSID)) ok = prefs.remove(kPrefsSSID) && ok;
+  if (prefs.isKey(kPrefsPassword)) ok = prefs.remove(kPrefsPassword) && ok;
   prefs.end();
 
   if (ok) {
-    _savedSSID.remove(0);
-    _savedPassword.remove(0);
-    _credentialCacheLoaded = true;
-    _credentialCacheValid = false;
+    clearCredentialCache(CredentialCacheStatus::NotFound);
+  } else {
+    clearCredentialCache(CredentialCacheStatus::Unknown);
   }
 
   if (disconnect) {
@@ -1219,11 +1469,9 @@ bool ESP32WiFiPortal::setPortalIP(const IPAddress& localIP,
     setError("Portal IP cannot be changed while the portal is active");
     return false;
   }
-  const ewp_internal::PortalNetworkValidationResult validation =
-      ewp_internal::validatePortalNetwork(ipToUint32(localIP),
-                                          ipToUint32(gateway),
-                                          ipToUint32(subnet));
-  if (validation != ewp_internal::PortalNetworkValidationResult::Valid) {
+  const PortalNetworkValidationResult validation = validatePortalNetwork(
+      ipv4ToUint32(localIP), ipv4ToUint32(gateway), ipv4ToUint32(subnet));
+  if (validation != PortalNetworkValidationResult::Valid) {
     setError(portalNetworkValidationMessage(validation));
     return false;
   }
@@ -1244,10 +1492,14 @@ bool ESP32WiFiPortal::setSTAStaticIP(const IPAddress& localIP,
     setError("STA IP cannot be changed during a connection attempt");
     return false;
   }
-  if (!isValidIPv4Network(localIP, gateway, subnet) ||
-      ipToUint32(localIP) == ipToUint32(gateway) ||
-      !isValidDNS(primaryDNS) || !isValidDNS(secondaryDNS) ||
-      (ipToUint32(primaryDNS) == 0 && ipToUint32(secondaryDNS) != 0)) {
+  const uint32_t local = ipv4ToUint32(localIP);
+  const uint32_t gatewayValue = ipv4ToUint32(gateway);
+  const uint32_t primaryDNSValue = ipv4ToUint32(primaryDNS);
+  const uint32_t secondaryDNSValue = ipv4ToUint32(secondaryDNS);
+  if (!isValidSTANetwork(local, gatewayValue, ipv4ToUint32(subnet)) ||
+      local == gatewayValue || !isValidDNSAddress(primaryDNSValue) ||
+      !isValidDNSAddress(secondaryDNSValue) ||
+      (primaryDNSValue == 0 && secondaryDNSValue != 0)) {
     setError("STA IP, gateway, subnet, or DNS configuration is invalid");
     return false;
   }
@@ -1328,6 +1580,11 @@ void ESP32WiFiPortal::setHostname(const char* hostname) {
 }
 
 void ESP32WiFiPortal::setConnectTimeout(uint32_t timeoutMs) {
+  if (timeoutMs == 0) {
+    _connectTimeoutMs = kDefaultConnectTimeoutMs;
+    log(F("[EWP] Connect timeout 0 normalized to 15000 ms"));
+    return;
+  }
   _connectTimeoutMs = timeoutMs;
 }
 
