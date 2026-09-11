@@ -268,7 +268,7 @@ bool setConnectionRetryPolicy(uint8_t retryCount,
 void setConnectTimeout(uint32_t timeoutMs);
 void setLogging(bool enabled);
 uint8_t lastDisconnectReason() const;
-
+bool isPortalConnectionAttemptActive() const;
 bool eraseCredentials(bool disconnect = true);
 ```
 

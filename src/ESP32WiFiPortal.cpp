@@ -1616,6 +1616,13 @@ bool ESP32WiFiPortal::isPortalActive() const {
   return _portalActive;
 }
 
+bool ESP32WiFiPortal::isPortalConnectionAttemptActive() const {
+  return _portalActive &&
+         (_connectPending ||
+          (_connectAttemptActive &&
+           _connectionOwner == ConnectionOwner::Portal));
+}
+
 bool ESP32WiFiPortal::isConnected() const {
   return WiFi.status() == WL_CONNECTED;
 }
