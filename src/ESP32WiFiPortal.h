@@ -70,6 +70,8 @@ public:
   void stopConfigPortal();
 
   bool isPortalActive() const;
+  // True while a Portal candidate is pending, retrying, or connecting on STA.
+  bool isPortalConnectionAttemptActive() const;
   bool isConnected() const;
   State state() const;
 
