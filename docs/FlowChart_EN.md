@@ -1,6 +1,6 @@
-# ESP32WiFiPortal 2.1.1 Operational Flowcharts
+# ESP32WiFiPortal 2.1.2 Operational Flowcharts
 
-This document describes the state machine of `ESP32WiFiPortal` 2.1.1 for blocking connections, blocking/non-blocking Config Portal operation, Wi-Fi events, retries, Auto Reconnect, and asynchronous Wi-Fi scanning.
+This document describes the state machine of `ESP32WiFiPortal` 2.1.2 for blocking connections, blocking/non-blocking Config Portal operation, Wi-Fi events, retries, Auto Reconnect, and asynchronous Wi-Fi scanning.
 
 ## STA Address Configuration
 
@@ -33,19 +33,24 @@ flowchart TD
     D -- Yes --> F[Store Portal IP configuration in the object]
     C --> G[connectSaved or autoConnect]
     F --> G
-    G --> H{Valid cred_blob?}
+    G --> X{cred_erased present?}
+    X -- Yes --> Y[Delete all credential records and return no credentials]
+    X -- No --> H{Valid cred_blob?}
     H -- Yes --> J[Apply DHCP or Static STA IP and start connection]
-    H -- Not found --> R{Valid legacy ssid/pass?}
+    H -- Missing or corrupt --> HB{Valid cred_backup?}
+    HB -- Yes --> HC[Use old backup and repair primary opportunistically]
+    HC --> J
+    HB -- No --> R{Valid legacy ssid/pass?}
     R -- Yes --> S[Write one blob, read it back, and verify CRC]
     S --> T{Verification successful?}
     T -- Yes --> U[Delete the two legacy keys]
     U --> J
     T -- No --> I{Using autoConnect?}
     R -- No --> I
-    H -- Corrupted --> I{Using autoConnect?}
     J --> K{Connected before timeout?}
     K -- Yes --> L[State = Connected]
     K -- No --> M[WiFi.disconnect, return false, and schedule saved credentials]
+    Y --> I
     I -- Yes --> N[Open blocking Config Portal]
     I -- No --> O[Return false to application]
     M --> I
@@ -131,7 +136,7 @@ releases its results; two scans never run concurrently.
 
 ```mermaid
 flowchart TD
-    A[POST /save] --> B{SSID is 1-32 bytes and password is empty or 8-63 bytes?}
+    A[POST /save] --> B{SSID is 1-32 bytes and password is empty, 8-63 bytes, or 64 hex digits?}
     B -- No --> C[HTTP 400]
     B -- Yes --> D{Pending or active attempt already exists?}
     D -- Yes --> E[HTTP 409]
@@ -150,7 +155,7 @@ flowchart TD
     R -- Yes --> S[Schedule retry using millis and backoff]
     S --> H
     R -- No --> T[Clear temporary credentials and keep Portal]
-    I -- Yes --> M[Serialize one cred_blob and call putBytes once]
+    I -- Yes --> M[Verify backup of old record, then write and verify cred_blob]
     M --> N{Read back full bytes with valid metadata and CRC?}
     N -- No --> O[Disconnect candidate STA, clear temporary data, keep Portal]
     N -- Yes --> P[Call callback, stop Portal, keep STA connected]
@@ -237,17 +242,20 @@ call `WiFi.begin()` concurrently.
 
 ```mermaid
 flowchart LR
-    A[eraseCredentials false] --> B[Delete cred_blob, ssid, and pass]
-    B --> C[Do not actively disconnect Wi-Fi]
-    D[eraseCredentials true] --> F[Delete cred_blob, ssid, and pass]
-    F --> E[Stop and clean up Portal if active]
-    E --> G[Disconnect Wi-Fi and erase core Wi-Fi configuration]
-    G --> H[State = Idle]
+    A[eraseCredentials] --> B[Write and verify cred_erased]
+    B --> C[Delete primary backup and legacy keys]
+    C --> D[Delete cred_erased last]
+    D --> E{Disconnect requested?}
+    E -- No --> F[Keep Wi-Fi state unchanged]
+    E -- Yes --> G{This instance owns global Wi-Fi?}
+    G -- No --> H[Return false without changing global Wi-Fi]
+    G -- Yes --> I[Stop Portal and request STA disconnect]
 ```
 
 `eraseCredentials()` is the only deletion operation explicitly requested by
-the public API. Connect timeout, Portal timeout, and `stopConfigPortal()` do not
-delete saved credentials.
+the public API. If reset occurs after the marker commit, boot completes deletion
+instead of restoring a surviving backup. Connect timeout, Portal timeout, and
+`stopConfigPortal()` do not delete saved credentials.
 
 ---
 
@@ -393,7 +401,7 @@ flowchart TD
     U --> V[Non-blocking STA candidate: Settling -> Config -> WiFi.begin]
     V --> W{Connected?}
 
-    W -- Success --> X[Write cred_blob, read-back + CRC]
+    W -- Success --> X[Verify old backup, then write/read-back cred_blob + CRC]
     X --> Y{Save successful?}
     Y -- Yes --> Z[Update cache, callbacks, stop Portal]
     Z --> I

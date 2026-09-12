@@ -1,6 +1,6 @@
-# Lưu đồ hoạt động ESP32WiFiPortal 2.1.1
+# Lưu đồ hoạt động ESP32WiFiPortal 2.1.2
 
-Tài liệu này mô tả state machine của `ESP32WiFiPortal` 2.1.1 cho kết nối blocking, Config Portal blocking/non-blocking, Wi-Fi event, retry, Auto Reconnect và Wi-Fi scan bất đồng bộ.
+Tài liệu này mô tả state machine của `ESP32WiFiPortal` 2.1.2 cho kết nối blocking, Config Portal blocking/non-blocking, Wi-Fi event, retry, Auto Reconnect và Wi-Fi scan bất đồng bộ.
 
 ## Cấu hình địa chỉ STA
 
@@ -33,19 +33,24 @@ flowchart TD
     D -- Có --> F[Lưu cấu hình Portal IP trong object]
     C --> G[connectSaved hoặc autoConnect]
     F --> G
-    G --> H{cred_blob hợp lệ?}
+    G --> X{Có cred_erased?}
+    X -- Có --> Y[Xóa mọi record credential và trả về không có credential]
+    X -- Không --> H{cred_blob hợp lệ?}
     H -- Có --> J[Áp dụng DHCP hoặc Static STA IP và bắt đầu connection]
-    H -- Không tồn tại --> R{Legacy ssid/pass hợp lệ?}
+    H -- Thiếu hoặc hỏng --> HB{cred_backup hợp lệ?}
+    HB -- Có --> HC[Dùng backup cũ và thử phục hồi primary]
+    HC --> J
+    HB -- Không --> R{Legacy ssid/pass hợp lệ?}
     R -- Có --> S[Ghi một blob, đọc lại và kiểm CRC]
     S --> T{Xác minh thành công?}
     T -- Có --> U[Xóa hai legacy key]
     U --> J
     T -- Không --> I{Đang dùng autoConnect?}
     R -- Không --> I
-    H -- Hỏng --> I{Đang dùng autoConnect?}
     J --> K{Kết nối trước timeout?}
     K -- Có --> L[State = Connected]
     K -- Không --> M[WiFi.disconnect, trả false và đặt lịch credential đã lưu]
+    Y --> I
     I -- Có --> N[Mở Config Portal blocking]
     I -- Không --> O[Trả false cho ứng dụng]
     M --> I
@@ -126,7 +131,7 @@ hợp lệ sẽ hủy scan đang chạy và giải phóng kết quả; không c�
 
 ```mermaid
 flowchart TD
-    A[POST /save] --> B{SSID đúng 1-32 byte và password rỗng hoặc 8-63 byte?}
+    A[POST /save] --> B{SSID đúng 1-32 byte và password rỗng, 8-63 byte hoặc 64 ký tự hex?}
     B -- Không --> C[HTTP 400]
     B -- Có --> D{Đã có attempt pending hoặc active?}
     D -- Có --> E[HTTP 409]
@@ -145,7 +150,7 @@ flowchart TD
     R -- Có --> S[Đặt lịch retry bằng millis và backoff]
     S --> H
     R -- Không --> T[Xóa credential tạm, giữ Portal]
-    I -- Có --> M[Serialize một cred_blob và putBytes một lần]
+    I -- Có --> M[Xác minh backup bản cũ, rồi ghi và xác minh cred_blob]
     M --> N{Đọc lại đủ byte, metadata và CRC hợp lệ?}
     N -- Không --> O[Ngắt candidate STA, xóa dữ liệu tạm, giữ Portal]
     N -- Có --> P[Gọi callback, dừng Portal, giữ STA connected]
@@ -228,16 +233,20 @@ Khi restart Portal, lịch phục hồi tạm thời được hủy trước khi
 
 ```mermaid
 flowchart LR
-    A[eraseCredentials false] --> B[Xóa cred_blob, ssid và pass]
-    B --> C[Không chủ động ngắt Wi-Fi]
-    D[eraseCredentials true] --> F[Xóa cred_blob, ssid và pass]
-    F --> E[Dừng và cleanup Portal nếu đang chạy]
-    E --> G[Ngắt Wi-Fi và xóa cấu hình Wi-Fi của core]
-    G --> H[State = Idle]
+    A[eraseCredentials] --> B[Ghi và xác minh cred_erased]
+    B --> C[Xóa primary backup và các legacy key]
+    C --> D[Xóa cred_erased sau cùng]
+    D --> E{Có yêu cầu disconnect?}
+    E -- Không --> F[Giữ nguyên trạng thái Wi-Fi]
+    E -- Có --> G{Instance này sở hữu global Wi-Fi?}
+    G -- Không --> H[Trả false, không đổi global Wi-Fi]
+    G -- Có --> I[Dừng Portal và yêu cầu ngắt STA]
 ```
 
 `eraseCredentials()` là thao tác xóa duy nhất do API công khai yêu cầu. Connect
-timeout, Portal timeout và `stopConfigPortal()` không xóa credential đã lưu.
+Nếu reset xảy ra sau khi marker được commit, boot tiếp tục xóa thay vì phục hồi
+backup còn sót. Connect timeout, Portal timeout và `stopConfigPortal()` không
+xóa credential đã lưu.
 
 ---
 
@@ -374,7 +383,7 @@ flowchart TD
     U --> V[Non-blocking STA candidate: Settling -> Config -> WiFi.begin]
     V --> W{Kết nối?}
 
-    W -- Thành công --> X[Ghi cred_blob, read-back + CRC]
+    W -- Thành công --> X[Xác minh backup cũ, rồi ghi/read-back cred_blob + CRC]
     X --> Y{Save thành công?}
     Y -- Có --> Z[Cập nhật cache, callbacks, stop Portal]
     Z --> I

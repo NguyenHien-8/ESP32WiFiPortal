@@ -1,8 +1,10 @@
 #include "FakeRuntime.h"
 
-#include <cassert>
+#include "TestAssert.h"
 
 FakeSerialClass Serial;
+FakeESPState FakeESP;
+ESPClass ESP;
 uint32_t FakeMillis = 0;
 FakeDNSServerState FakeDNS;
 FakeWebServerState FakeWebServer;
@@ -21,6 +23,7 @@ void resetFakeRuntime(bool preservePreferences) {
   const auto savedBytes = FakePreferences.bytes;
   const auto savedStrings = FakePreferences.strings;
   FakeMillis = 0;
+  FakeESP = FakeESPState();
   FakeDNS = FakeDNSServerState();
   FakeWebServer = FakeWebServerState();
   FakeWiFi = FakeWiFiState();
@@ -29,4 +32,11 @@ void resetFakeRuntime(bool preservePreferences) {
     FakePreferences.bytes = savedBytes;
     FakePreferences.strings = savedStrings;
   }
+}
+
+void emitWiFiEvent(arduino_event_id_t event, uint8_t reason) {
+  if (!FakeWiFi.eventHandler) return;
+  arduino_event_info_t info;
+  info.wifi_sta_disconnected.reason = reason;
+  FakeWiFi.eventHandler(event, info);
 }

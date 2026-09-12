@@ -1,4 +1,12 @@
-# ESP32WiFiPortal 2.1.1
+# ESP32WiFiPortal 2.1.2
+
+![GitHub repo size](https://img.shields.io/github/repo-size/NguyenHien-8/ESP32WiFiPortal)
+[![GitHub license](https://img.shields.io/github/license/NguyenHien-8/ESP32WiFiPortal)](https://github.com/NguyenHien-8/ESP32WiFiPortal/blob/master/LICENSE)
+[![ESP32 WROOM](https://img.shields.io/badge/ESP-32WROOM-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32)
+[![ESP32 S2](https://img.shields.io/badge/ESP-32S2-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-s2)
+[![ESP32 S3](https://img.shields.io/badge/ESP-32S3-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-S3)
+[![ESP32 C3](https://img.shields.io/badge/ESP-32C3-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-c3)
+[![ESP32 C6](https://img.shields.io/badge/ESP-32C6-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-c6)
 
 <p align="center">
   <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="23%">
@@ -6,6 +14,15 @@
   <img src="docs/image/TiNiHi3.jpg" alt="ESP32WiFiPortal interface 3" width="23%">
   <img src="docs/image/TiNiHi4.jpg" alt="ESP32WiFiPortal interface 4" width="23%">
 </p>
+
+## How it works
+
+- Upon startup, the ESP enters Station mode and attempts to connect to a previously saved access point.
+- If this fails (or if no network was previously saved), the ESP switches to Access Point mode and initializes DNS and Web servers (default IP address: 192.168.4.1).
+- Use any Wi-Fi-enabled device with a web browser (computer, smartphone, or tablet) to connect to the newly created access point.
+- Due to the Captive Portal and DNS server, a "Join Network" pop-up will appear, or any domain you attempt to visit will be redirected to the configuration portal.
+- Select one of the scanned access points, enter the password, and click save.
+- The ESP will attempt to connect. If successful, it returns control to your application. Otherwise, it remains on the Wi-Fi Portal interface.
 
 ## Features
 
@@ -16,9 +33,9 @@
 - Lightweight `WiFi.onEvent()` tracking with disconnect reasons
 - Library-managed auto reconnect with bounded retry bursts and capped backoff
 - Automatic recovery of the last saved Wi-Fi after an unsuccessful Portal session
-- Asynchronous Wi-Fi scanning and CRC-checked single-record NVS credentials
+- Asynchronous Wi-Fi scanning and transactional CRC-checked NVS credentials
 - Power-loss-safe migration from the legacy `ssid`/`pass` key pair
-- Advanced manual entry for hidden or unlisted Wi-Fi networks
+- Advanced manual entry, runtime device properties, and deferred reboot control
 - Blocking, non-blocking, and on-demand portal modes
 - Safe cancellation of pending STA attempts when the portal stops or times out
 - No third-party runtime dependency
@@ -118,8 +135,10 @@ Call `useSTADHCP()` to restore DHCP for the next connection attempt.
 ## Events, retry, and Auto Reconnect
 
 The library registers one Arduino-ESP32 Wi-Fi event handler. Its callback only
-records atomic flags and the disconnect reason; state transitions, logging,
-retry, DNS, and WebServer work remain in application context.
+records atomic flags, the latest disconnect reason, and a latched credential
+failure reason; state transitions, logging, retry, DNS, and WebServer work
+remain in application context. The latch prevents a later disconnect event
+from hiding an authentication failure before `process()` runs.
 
 ```cpp
 portal.setConnectTimeout(10000);
@@ -152,6 +171,20 @@ use `setAutoReconnect(false)` to disable it. Call `process()` frequently from
 library disables the Arduino core's own automatic reconnect while it is managing
 Wi-Fi, preventing two independent policies from racing. `lastDisconnectReason()`
 returns the latest ESP32 reason code processed by the state machine.
+The Wi-Fi driver is switched to RAM-only configuration storage before managed
+connections. Credentials remain durable in this library's CRC-checked
+Preferences records without repeatedly writing the Arduino driver's separate
+Wi-Fi record during reconnects.
+
+Arduino-ESP32 exposes one process-wide `WiFi` object. Use one live
+`ESP32WiFiPortal` manager and call its public runtime methods from the same
+application task. A second active manager is rejected instead of being allowed
+to race event callbacks or reconnect policy, including through
+`setAutoReconnect()` or `eraseCredentials(true)`. Stopping only the Portal does
+not release Wi-Fi ownership because the same manager may still service STA
+events/reconnects; destroying the manager releases it. Configure a hostname of at most 31
+bytes with `setHostname()` before the first Wi-Fi operation; it is applied
+before Wi-Fi mode initialization so DHCP receives the intended hostname.
 If a blocking `connectSaved()` attempt returns `false`, its saved credentials
 are also scheduled for background recovery; a following `autoConnect()` Portal
 start cancels that schedule before taking ownership of the STA interface.
@@ -162,19 +195,31 @@ Retry, and Reconnect transitions. Passwords are never logged. Use
 
 ## Credential persistence and migration
 
-Credentials are stored as one fixed-size `cred_blob` record in the
-`ewp_wifi` Preferences namespace. The record contains a magic value, format
-version, encoded size, explicit SSID/password byte lengths, fixed-capacity
-payloads, and a CRC32 (IEEE polynomial `0xEDB88320`). A save uses one
-`putBytes()` call, then reads the complete record back and validates its metadata,
-lengths, value, and CRC before the in-memory reconnect cache is changed.
+Credentials are stored in a fixed-size primary `cred_blob` record in the
+`ewp_wifi` Preferences namespace. A temporary `cred_backup` record protects the
+last verified value while an existing credential is updated. Each record
+contains a magic value, format version, encoded size, explicit SSID/password
+byte lengths, fixed-capacity payloads, and a CRC32 (IEEE polynomial
+`0xEDB88320`). Every write is read back and validated for metadata, lengths,
+exact value, and CRC before it is trusted. Saving an unchanged credential
+performs no NVS write.
+
+For an update, the old primary is first copied to `cred_backup` and verified;
+the new primary is then written and verified before the backup is removed. On
+boot, a valid primary wins. If the primary is partial or corrupt but the backup
+is valid, the old value is used immediately and primary repair is attempted.
+Consequently a reset during an update selects a complete old or new record,
+never a partial mixture.
 
 On first use after upgrading, a valid legacy `ssid`/`pass` pair is converted to
 the blob. The legacy keys are removed only after verified read-back. If power is
 lost during that write, the complete legacy pair remains the recovery source;
-if a blob is corrupt and no complete legacy pair exists, it is rejected and is
-never passed to `WiFi.begin()`. `eraseCredentials()` removes the blob and both
-legacy keys.
+if both primary/backup records are unusable and no complete legacy pair exists,
+the credentials are rejected and never passed to `WiFi.begin()`.
+`eraseCredentials()` first commits a `cred_erased` tombstone, then removes both
+records and both legacy keys, and removes the tombstone last. On reboot, marker
+presence suppresses every older record and completes cleanup, so a reset between
+deleting `cred_blob` and `cred_backup` cannot resurrect erased credentials.
 
 CRC detects accidental corruption and interrupted writes; it is not encryption,
 authentication, or tamper protection. Preferences/NVS access control and device
@@ -183,13 +228,15 @@ physical security remain application/deployment responsibilities.
 ## Captive portal UI
 
 The normal scan list remains the default view. The underlined
-**Advanced Wi-Fi Setting** link directly below the portal brand opens a manual
-form for hidden or unlisted networks and includes a keyboard-accessible Back
-link. SSIDs are submitted exactly as entered, including leading/trailing spaces,
-and are validated as 1-32 bytes. Passwords must be empty for an open network or
-8-63 bytes for a secured network. The password is sent only by POST to `/save`,
-is never placed in a URL or browser storage, and the existing connection state
-machine prevents double submission.
+**More Wi-Fi settings** link opens offline SPA views for manual credentials,
+runtime device properties, and restart. Manual SSIDs are submitted exactly as
+entered, including leading/trailing spaces, and are validated as 1-32 bytes.
+Passwords must be empty for an open network, 8-63 bytes for a passphrase, or
+exactly 64 hexadecimal digits for a raw WPA/WPA2 PSK. The password is sent
+only by POST to `/save`, is never placed in a URL or browser storage, and the
+existing connection state machine prevents double submission. Properties are
+fetched only when their view opens, and Reset uses a POST followed by a deferred
+restart in `process()` without erasing credentials.
 
 The scan progress indicator uses a fixed-width translated bar with linear
 infinite motion. It never scales or changes shape, and it becomes static when
@@ -266,11 +313,29 @@ bool setConnectionRetryPolicy(uint8_t retryCount,
                               uint32_t retryIntervalMs,
                               uint32_t maxRetryIntervalMs);
 void setConnectTimeout(uint32_t timeoutMs);
+bool setHostname(const char* hostname);
 void setLogging(bool enabled);
 uint8_t lastDisconnectReason() const;
 bool isPortalConnectionAttemptActive() const;
 bool eraseCredentials(bool disconnect = true);
 ```
+
+## Changes in 2.1.2
+
+- More Wi-Fi settings now separates Manual Configure WiFi, runtime Properties,
+  and Reset into responsive offline SPA views.
+- `GET /properties` reports current ESP32, SoftAP, STA, and MAC information
+  without exposing Wi-Fi passwords or polling in the background.
+- `POST /reset` acknowledges the request before a cooperative, wrap-safe,
+  deferred restart; saved credentials remain intact.
+- Manual credentials still use the existing `/save` validation and connection
+  state machine, preserving exact SSID bytes and supporting 64-digit raw PSKs.
+- Transactional primary/backup credential updates survive interruption without
+  destroying the last verified record.
+- A verified erase tombstone prevents a surviving backup from being restored
+  when power is lost during credential deletion.
+- The Wi-Fi driver uses RAM-only configuration storage, validates mode/hostname
+  setup, and rejects all global-state operations from competing portal instances.
 
 ## Changes in 2.1.1
 

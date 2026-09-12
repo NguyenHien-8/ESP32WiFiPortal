@@ -2,8 +2,8 @@
  * @file ESP32WiFiPortal.cpp
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library implementation
- * @version 2.1.1
- * @date 2026-09-10
+ * @version 2.1.2
+ * @date 2026-09-12
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
@@ -47,6 +47,22 @@ void appendIPAddress(String& output, const IPAddress& address) {
   }
 }
 
+void appendHex64(String& output, uint64_t value) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (int8_t shift = 60; shift >= 0; shift -= 4) {
+    output += kHex[(value >> shift) & 0x0F];
+  }
+}
+
+void appendMACAddress(String& output, const uint8_t* address) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (uint8_t i = 0; i < 6; ++i) {
+    if (i > 0) output += ':';
+    output += kHex[address[i] >> 4];
+    output += kHex[address[i] & 0x0F];
+  }
+}
+
 uint32_t hashSSID(const String& ssid) {
   uint32_t hash = 2166136261UL;
   for (size_t i = 0; i < ssid.length(); ++i) {
@@ -55,12 +71,19 @@ uint32_t hashSSID(const String& ssid) {
   }
   return hash;
 }
+
+// Arduino-ESP32 exposes one process-wide WiFi object. Two portal instances
+// installing callbacks and reconnect policies against it cannot be isolated,
+// so ownership is explicit and deterministic instead of allowing races.
+ESP32WiFiPortal* activeWiFiOwner = nullptr;
 }  // namespace
 
 constexpr uint16_t ESP32WiFiPortal::kDnsPort;
 constexpr uint16_t ESP32WiFiPortal::kHttpPort;
 constexpr const char* ESP32WiFiPortal::kPrefsNamespace;
 constexpr const char* ESP32WiFiPortal::kPrefsCredential;
+constexpr const char* ESP32WiFiPortal::kPrefsCredentialBackup;
+constexpr const char* ESP32WiFiPortal::kPrefsCredentialEraseMarker;
 constexpr const char* ESP32WiFiPortal::kPrefsSSID;
 constexpr const char* ESP32WiFiPortal::kPrefsPassword;
 constexpr uint32_t ESP32WiFiPortal::kCredentialMagic;
@@ -72,6 +95,7 @@ constexpr size_t ESP32WiFiPortal::kCredentialPasswordOffset;
 constexpr size_t ESP32WiFiPortal::kCredentialCRCOffset;
 constexpr size_t ESP32WiFiPortal::kCredentialRecordSize;
 constexpr uint32_t ESP32WiFiPortal::kDefaultConnectTimeoutMs;
+constexpr uint32_t ESP32WiFiPortal::kRestartDelayMs;
 
 const char* ESP32WiFiPortal::portalNetworkValidationMessage(
     PortalNetworkValidationResult result) {
@@ -110,7 +134,7 @@ ESP32WiFiPortal::ESP32WiFiPortal()
       _portalSubnet(255, 255, 255, 0) {}
 
 ESP32WiFiPortal::~ESP32WiFiPortal() {
-  const bool restoreCoreAutoReconnect = _wifiEventHandlerId != 0;
+  const bool restoreCoreAutoReconnect = activeWiFiOwner == this;
   if (_wifiEventHandlerId != 0) {
     WiFi.removeEvent(_wifiEventHandlerId);
     _wifiEventHandlerId = 0;
@@ -118,14 +142,28 @@ ESP32WiFiPortal::~ESP32WiFiPortal() {
   stopConfigPortal();
   cancelAutoReconnect(true);
   if (restoreCoreAutoReconnect) {
-    WiFi.setAutoReconnect(_coreAutoReconnectWasEnabled);
+    if (!WiFi.setAutoReconnect(_coreAutoReconnectWasEnabled) &&
+        _loggingEnabled) {
+      Serial.println(F("[EWP] Failed to restore core auto reconnect policy"));
+    }
+    activeWiFiOwner = nullptr;
   }
 }
 
-void ESP32WiFiPortal::ensureWiFiEventHandler() {
-  if (_wifiEventHandlerId != 0) return;
+bool ESP32WiFiPortal::ensureWiFiEventHandler() {
+  if (_wifiEventHandlerId != 0) return true;
+  if (activeWiFiOwner && activeWiFiOwner != this) {
+    setError("Wi-Fi is already managed by another ESP32WiFiPortal instance");
+    return false;
+  }
+
+  activeWiFiOwner = this;
 
   _coreAutoReconnectWasEnabled = WiFi.getAutoReconnect();
+  // This library owns credential persistence. Keeping the Arduino driver's
+  // default FLASH storage would rewrite its separate Wi-Fi record during
+  // provisioning/reconnect cycles and unnecessarily wear NVS.
+  WiFi.persistent(false);
   _wifiEventHandlerId = WiFi.onEvent(
       [this](arduino_event_id_t event, arduino_event_info_t info) {
         switch (event) {
@@ -137,6 +175,13 @@ void ESP32WiFiPortal::ensureWiFiEventHandler() {
             break;
           case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
             _eventDisconnectReason.store(info.wifi_sta_disconnected.reason);
+            if (isCredentialFailureReason(
+                    info.wifi_sta_disconnected.reason)) {
+              // Preserve a terminal credential reason even if a later
+              // disconnect is coalesced before process() drains the flags.
+              _eventCredentialFailureReason.store(
+                  info.wifi_sta_disconnected.reason);
+            }
             _wifiEventBits.fetch_or(kEventSTADisconnected);
             break;
           default:
@@ -144,15 +189,29 @@ void ESP32WiFiPortal::ensureWiFiEventHandler() {
         }
       });
 
-  if (_wifiEventHandlerId != 0) {
-    // The library owns reconnect timing. Leaving the core policy enabled would
-    // create a second, uncoordinated reconnect path from the event task.
-    WiFi.setAutoReconnect(false);
+  if (_wifiEventHandlerId == 0) {
+    activeWiFiOwner = nullptr;
+    setError("Unable to register the Wi-Fi event handler");
+    return false;
   }
+
+  // The library owns reconnect timing. Leaving the core policy enabled would
+  // create a second, uncoordinated reconnect path from the event task.
+  if (!WiFi.setAutoReconnect(false)) {
+    WiFi.removeEvent(_wifiEventHandlerId);
+    _wifiEventHandlerId = 0;
+    activeWiFiOwner = nullptr;
+    setError("Unable to disable the Arduino Wi-Fi reconnect policy");
+    return false;
+  }
+  return true;
 }
 
 bool ESP32WiFiPortal::connectSaved(uint32_t timeoutMs) {
-  ensureWiFiEventHandler();
+  if (!ensureWiFiEventHandler()) {
+    _state = State::Failed;
+    return false;
+  }
   cancelAutoReconnect(true);
   if (_portalActive) {
     stopConfigPortal();
@@ -213,8 +272,8 @@ bool ESP32WiFiPortal::startConfigPortalAsync(const char* apSSID,
 bool ESP32WiFiPortal::openPortal(const char* apSSID,
                                  const char* apPassword,
                                  uint32_t portalTimeoutMs) {
-  if (!apSSID || strlen(apSSID) == 0) {
-    setError("AP SSID cannot be empty");
+  if (!apSSID || strlen(apSSID) == 0 || strlen(apSSID) > 32) {
+    setError("AP SSID must contain 1-32 bytes");
     return false;
   }
   if (!validAPPassword(apPassword)) {
@@ -230,7 +289,10 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
     return false;
   }
 
-  ensureWiFiEventHandler();
+  if (!ensureWiFiEventHandler()) {
+    _state = State::Failed;
+    return false;
+  }
   // Load the last known-good credentials before a Portal candidate can use
   // the STA interface. They remain cached until a candidate is proven and
   // committed, or the application explicitly erases them.
@@ -245,15 +307,26 @@ bool ESP32WiFiPortal::openPortal(const char* apSSID,
   releaseSTAConnection();
   _portalRetriesUsed = 0;
 
-  WiFi.mode(WIFI_AP_STA);
+  // Arduino-ESP32 2.x copies the configured STA hostname into the netif while
+  // enabling the mode, so set it before mode()/begin().
+  if (_hostname.length() > 0 && !WiFi.setHostname(_hostname.c_str())) {
+    return failPortalStart("Failed to configure the Wi-Fi hostname");
+  }
+  if (!WiFi.mode(WIFI_AP_STA)) {
+    return failPortalStart("Failed to enable ESP32 AP+STA mode");
+  }
+  if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) {
+    return failPortalStart("Failed to select RAM-only Wi-Fi driver storage");
+  }
   if (!WiFi.softAPConfig(_portalIP, _portalGateway, _portalSubnet)) {
     return failPortalStart(
         "WiFi.softAPConfig() failed for the requested portal IP/subnet");
   }
 
   if (_hostname.length() > 0) {
-    WiFi.setHostname(_hostname.c_str());
-    WiFi.softAPsetHostname(_hostname.c_str());
+    if (!WiFi.softAPsetHostname(_hostname.c_str())) {
+      return failPortalStart("Failed to configure the SoftAP hostname");
+    }
   }
 
   bool apOk = false;
@@ -313,7 +386,12 @@ bool ESP32WiFiPortal::failPortalStart(const char* message) {
   }
   _dns.stop();
   resetScan(true);
-  WiFi.softAPdisconnect(true);
+  bool softAPStopped = WiFi.softAPdisconnect(true);
+  if (!softAPStopped) {
+    // Some core/IDF combinations can fail while clearing the AP config. A
+    // direct mode transition is a bounded fallback that still preserves STA.
+    softAPStopped = WiFi.mode(WIFI_STA);
+  }
 
   _portalTimeoutMs = 0;
   _portalStartedAt = 0;
@@ -324,7 +402,11 @@ bool ESP32WiFiPortal::failPortalStart(const char* message) {
   _scanNetworkIdentities.reset();
   _scanNetworkIdentityCapacity = 0;
 
-  setError(message);
+  String failureMessage(message);
+  if (!softAPStopped) {
+    failureMessage += "; failed to disable the SoftAP interface";
+  }
+  setError(failureMessage);
   _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Failed;
   scheduleSavedConnectionRecovery();
   return false;
@@ -338,6 +420,8 @@ void ESP32WiFiPortal::configureRoutes() {
   _server->on("/scan", HTTP_GET, [this]() { handleScan(); });
   _server->on("/save", HTTP_POST, [this]() { handleSave(); });
   _server->on("/status", HTTP_GET, [this]() { handleStatus(); });
+  _server->on("/properties", HTTP_GET, [this]() { handleProperties(); });
+  _server->on("/reset", HTTP_POST, [this]() { handleReset(); });
 
   // Common captive portal probes used by Android, Apple and Windows.
   _server->on("/generate_204", HTTP_ANY, [this]() { handleCaptiveProbe(); });
@@ -524,7 +608,7 @@ void ESP32WiFiPortal::handleSave() {
     _pendingSSID.remove(0);
     _pendingPassword.remove(0);
     _server->send(400, "text/plain; charset=utf-8",
-                  "SSID must be 1-32 bytes; password must be empty or 8-63 bytes");
+                  "SSID must be 1-32 bytes; password must be empty, 8-63 bytes, or a 64-digit hexadecimal PSK");
     return;
   }
 
@@ -564,6 +648,69 @@ void ESP32WiFiPortal::handleStatus() {
   _server->send(200, "application/json; charset=utf-8", _responseBuffer);
 }
 
+void ESP32WiFiPortal::handleProperties() {
+  if (!_server) return;
+
+  const bool staConnected = WiFi.status() == WL_CONNECTED;
+  uint8_t apMAC[6] = {};
+  uint8_t staMAC[6] = {};
+  WiFi.softAPmacAddress(apMAC);
+  WiFi.macAddress(staMAC);
+
+  _responseBuffer.remove(0);
+  _responseBuffer.reserve(480 + _portalSSID.length());
+  _responseBuffer = F("{\"ssid\":\"");
+  appendJsonEscaped(_responseBuffer, _portalSSID);
+  _responseBuffer += F("\",\"softap\":{\"ip\":\"");
+  appendIPAddress(_responseBuffer, WiFi.softAPIP());
+  _responseBuffer += F("\",\"gateway\":\"");
+  // Arduino-ESP32 exposes the runtime SoftAP IP/subnet, but no matching
+  // SoftAP gateway getter. This is the exact value configured by openPortal().
+  appendIPAddress(_responseBuffer, _portalGateway);
+  _responseBuffer += F("\",\"subnet\":\"");
+  appendIPAddress(_responseBuffer, WiFi.softAPSubnetMask());
+  _responseBuffer += F("\"},\"sta\":{\"connected\":");
+  _responseBuffer += staConnected ? F("true") : F("false");
+  _responseBuffer += F(",\"ip\":\"");
+  if (staConnected) appendIPAddress(_responseBuffer, WiFi.localIP());
+  _responseBuffer += F("\",\"gateway\":\"");
+  if (staConnected) appendIPAddress(_responseBuffer, WiFi.gatewayIP());
+  _responseBuffer += F("\",\"subnet\":\"");
+  if (staConnected) appendIPAddress(_responseBuffer, WiFi.subnetMask());
+  _responseBuffer += F("\"},\"mac\":{\"ap\":\"");
+  appendMACAddress(_responseBuffer, apMAC);
+  _responseBuffer += F("\",\"sta\":\"");
+  appendMACAddress(_responseBuffer, staMAC);
+  _responseBuffer += F("\"},\"chipId\":\"");
+  appendHex64(_responseBuffer, ESP.getEfuseMac());
+  _responseBuffer += F("\",\"cpuMHz\":");
+  _responseBuffer += ESP.getCpuFreqMHz();
+  _responseBuffer += F(",\"flashSize\":");
+  _responseBuffer += ESP.getFlashChipSize();
+  _responseBuffer += F(",\"flashSpeed\":");
+  _responseBuffer += ESP.getFlashChipSpeed();
+  _responseBuffer += F(",\"freeHeap\":");
+  _responseBuffer += ESP.getFreeHeap();
+  _responseBuffer += '}';
+
+  _server->sendHeader("Cache-Control", "no-store");
+  _server->send(200, "application/json; charset=utf-8", _responseBuffer);
+}
+
+void ESP32WiFiPortal::handleReset() {
+  if (!_server) return;
+
+  _server->sendHeader("Cache-Control", "no-store");
+  _server->send(202, "application/json; charset=utf-8",
+                "{\"restarting\":true}");
+
+  // Keep the first timestamp so repeated POSTs cannot postpone the reboot.
+  if (!_restartPending) {
+    _restartRequestedAt = millis();
+    _restartPending = true;
+  }
+}
+
 void ESP32WiFiPortal::handleCaptiveProbe() {
   if (!_server) return;
   _server->sendHeader("Location", _redirectURL, true);
@@ -577,6 +724,13 @@ void ESP32WiFiPortal::handleNotFound() {
 
 void ESP32WiFiPortal::process() {
   processWiFiEvents();
+
+  if (_restartPending &&
+      millis() - _restartRequestedAt >= kRestartDelayMs) {
+    _restartPending = false;
+    ESP.restart();
+    return;
+  }
 
   if (_portalActive) {
     processScan();
@@ -703,14 +857,29 @@ bool ESP32WiFiPortal::beginSTAConnection(ConnectionOwner owner) {
     return false;
   }
 
-  ensureWiFiEventHandler();
-  WiFi.setAutoReconnect(false);
+  if (!ensureWiFiEventHandler()) return false;
 
   processWiFiEvents();
-  WiFi.mode(_portalActive ? WIFI_AP_STA : WIFI_STA);
-  if (_hostname.length() > 0) {
-    WiFi.setHostname(_hostname.c_str());
-    if (_portalActive) WiFi.softAPsetHostname(_hostname.c_str());
+  if (_hostname.length() > 0 && !WiFi.setHostname(_hostname.c_str())) {
+    setError("Failed to configure the Wi-Fi hostname");
+    return false;
+  }
+  if (!WiFi.mode(_portalActive ? WIFI_AP_STA : WIFI_STA)) {
+    setError("Failed to enable the required ESP32 Wi-Fi mode");
+    return false;
+  }
+  if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) {
+    setError("Failed to select RAM-only Wi-Fi driver storage");
+    return false;
+  }
+  if (!WiFi.setAutoReconnect(false)) {
+    setError("Unable to disable the Arduino Wi-Fi reconnect policy");
+    return false;
+  }
+  if (_hostname.length() > 0 && _portalActive &&
+      !WiFi.softAPsetHostname(_hostname.c_str())) {
+    setError("Failed to configure the SoftAP hostname");
+    return false;
   }
 
   _connectionOwner = owner;
@@ -725,7 +894,13 @@ bool ESP32WiFiPortal::beginSTAConnection(ConnectionOwner owner) {
   // before the next retry, but remain conservative for the first attempt or a
   // currently connected interface.
   if (!_staDisconnected || WiFi.status() == WL_CONNECTED) {
-    WiFi.disconnect(false, false);
+    const bool wasConnected = WiFi.status() == WL_CONNECTED;
+    const bool disconnected = WiFi.disconnect(false, false);
+    if (!disconnected && wasConnected && WiFi.status() == WL_CONNECTED) {
+      releaseSTAConnection();
+      setError("Failed to disconnect the current STA connection");
+      return false;
+    }
     _staDisconnected = true;
     _connectionSettleDelayMs = kSTADisconnectSettleMs;
   }
@@ -804,8 +979,11 @@ void ESP32WiFiPortal::cancelSTAConnection() {
       !_staDisconnected;
   releaseSTAConnection();
   if (disconnectSTA) {
-    WiFi.disconnect(false, false);
-    _staDisconnected = true;
+    const bool disconnected = WiFi.disconnect(false, false);
+    _staDisconnected = WiFi.status() != WL_CONNECTED;
+    if (!disconnected && !_staDisconnected) {
+      setError("Failed to cancel the STA connection attempt");
+    }
   }
 }
 
@@ -835,6 +1013,8 @@ void ESP32WiFiPortal::processWiFiEvents() {
   if ((events & kEventSTADisconnected) == 0) return;
 
   uint8_t reason = static_cast<uint8_t>(_eventDisconnectReason.load());
+  const uint8_t credentialFailureReason = static_cast<uint8_t>(
+      _eventCredentialFailureReason.exchange(0));
   if (reason == 0) reason = WIFI_REASON_UNSPECIFIED;
   _lastDisconnectReason = reason;
   logDisconnect(reason);
@@ -849,7 +1029,8 @@ void ESP32WiFiPortal::processWiFiEvents() {
     if (_connectionPhase == ConnectionPhase::Connecting &&
         _connectionOwner != ConnectionOwner::Reconnect) {
       _attemptTerminalFailure =
-          _attemptTerminalFailure || isCredentialFailureReason(reason);
+          _attemptTerminalFailure || credentialFailureReason != 0 ||
+          isCredentialFailureReason(reason);
     }
     return;
   }
@@ -1012,7 +1193,10 @@ bool ESP32WiFiPortal::connect(uint32_t timeoutMs) {
     stopConfigPortal();
   }
 
-  ensureWiFiEventHandler();
+  if (!ensureWiFiEventHandler()) {
+    _state = State::Failed;
+    return false;
+  }
   cancelAutoReconnect(true);
   if (timeoutMs == 0) {
     timeoutMs = kDefaultConnectTimeoutMs;
@@ -1100,8 +1284,12 @@ void ESP32WiFiPortal::stopConfigPortal() {
   _dns.stop();
   resetScan(true);
 
+  bool softAPStopped = true;
   if (wasPortalActive) {
-    WiFi.softAPdisconnect(true);
+    softAPStopped = WiFi.softAPdisconnect(true);
+    if (!softAPStopped) {
+      softAPStopped = WiFi.mode(WIFI_STA);
+    }
     log(F("[EWP] Portal stopped"));
   }
 
@@ -1118,6 +1306,11 @@ void ESP32WiFiPortal::stopConfigPortal() {
     _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Idle;
   }
 
+  if (!softAPStopped) {
+    setError("Failed to disable the SoftAP interface");
+    _state = State::Failed;
+  }
+
   if (wasPortalActive && WiFi.status() != WL_CONNECTED) {
     scheduleSavedConnectionRecovery();
   }
@@ -1125,7 +1318,7 @@ void ESP32WiFiPortal::stopConfigPortal() {
 
 bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password) {
   if (!validSTACredentials(ssid, password)) {
-    setError("Invalid Wi-Fi credential length");
+    setError("Invalid Wi-Fi credentials");
     return false;
   }
 
@@ -1135,7 +1328,21 @@ bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password
     return false;
   }
 
-  const bool saved = writeCredentialRecord(prefs, ssid, password);
+  // An interrupted erase marker invalidates every older credential record.
+  // Keep the marker until the replacement primary has survived exact
+  // read-back, so reset during provisioning cannot resurrect erased data.
+  const bool erasePending = prefs.isKey(kPrefsCredentialEraseMarker);
+  if (erasePending && !removeStoredCredentials(prefs)) {
+    prefs.end();
+    setError("Unable to finish the pending credential erase");
+    clearCredentialCache(CredentialCacheStatus::Unavailable);
+    return false;
+  }
+
+  bool saved = writeCredentialRecord(prefs, ssid, password);
+  if (saved && erasePending) {
+    saved = prefs.remove(kPrefsCredentialEraseMarker);
+  }
   if (saved) {
     // Legacy keys are kept until the new record has survived an exact
     // read-back and CRC validation. A reset at any earlier point can safely
@@ -1149,6 +1356,8 @@ bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password
     _savedSSID = ssid;
     _savedPassword = password;
     _credentialCacheStatus = CredentialCacheStatus::Valid;
+  } else {
+    setError("Unable to commit the Wi-Fi credential transaction");
   }
   return saved;
 }
@@ -1169,14 +1378,31 @@ bool ESP32WiFiPortal::ensureCredentialCache() {
     return false;
   }
 
+  if (prefs.isKey(kPrefsCredentialEraseMarker)) {
+    // Marker presence is intentionally fail-closed, including a short marker
+    // left by power loss. Old primary, backup, and legacy keys must never be
+    // considered once erase has started.
+    const bool removed = removeStoredCredentials(prefs);
+    const bool markerRemoved =
+        removed && prefs.remove(kPrefsCredentialEraseMarker);
+    prefs.end();
+    clearCredentialCache(removed && markerRemoved
+                             ? CredentialCacheStatus::NotFound
+                             : CredentialCacheStatus::Unavailable);
+    return false;
+  }
+
   String ssid;
   String password;
   const CredentialCacheStatus blobStatus =
-      readCredentialBlob(prefs, ssid, password);
+      readCredentialBlob(prefs, kPrefsCredential, ssid, password);
+  const bool staleBackup = prefs.isKey(kPrefsCredentialBackup);
   const bool staleLegacyKeys =
       prefs.isKey(kPrefsSSID) || prefs.isKey(kPrefsPassword);
   if (blobStatus == CredentialCacheStatus::Valid) {
-    // Complete cleanup if power was lost after a verified migration write.
+    // A valid primary record is authoritative. Backup/legacy keys can remain
+    // only when power was lost after the primary commit and before cleanup.
+    if (staleBackup) prefs.remove(kPrefsCredentialBackup);
     if (staleLegacyKeys) {
       if (prefs.isKey(kPrefsSSID)) prefs.remove(kPrefsSSID);
       if (prefs.isKey(kPrefsPassword)) prefs.remove(kPrefsPassword);
@@ -1184,6 +1410,22 @@ bool ESP32WiFiPortal::ensureCredentialCache() {
     prefs.end();
     _savedSSID = std::move(ssid);
     _savedPassword = std::move(password);
+    _credentialCacheStatus = CredentialCacheStatus::Valid;
+    return true;
+  }
+
+  String backupSSID;
+  String backupPassword;
+  const CredentialCacheStatus backupStatus = readCredentialBlob(
+      prefs, kPrefsCredentialBackup, backupSSID, backupPassword);
+  if (backupStatus == CredentialCacheStatus::Valid) {
+    // An interrupted update may leave a partial primary. Use the verified old
+    // value immediately and repair the primary opportunistically. A failed
+    // repair leaves the backup intact for the next boot.
+    writeCredentialRecord(prefs, backupSSID, backupPassword);
+    prefs.end();
+    _savedSSID = std::move(backupSSID);
+    _savedPassword = std::move(backupPassword);
     _credentialCacheStatus = CredentialCacheStatus::Valid;
     return true;
   }
@@ -1214,6 +1456,7 @@ bool ESP32WiFiPortal::ensureCredentialCache() {
   prefs.end();
   clearCredentialCache(
       blobStatus == CredentialCacheStatus::Corrupt ||
+              backupStatus == CredentialCacheStatus::Corrupt ||
               legacyStatus == CredentialCacheStatus::Corrupt
           ? CredentialCacheStatus::Corrupt
           : CredentialCacheStatus::NotFound);
@@ -1224,10 +1467,11 @@ bool ESP32WiFiPortal::validSTACredentials(const String& ssid,
                                           const String& password) {
   const size_t ssidLength = ssid.length();
   const size_t passwordLength = password.length();
-  if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
+  if (ssidLength == 0 || ssidLength > 32 || passwordLength > 64 ||
       (passwordLength > 0 && passwordLength < 8)) {
     return false;
   }
+  if (passwordLength == 64 && !isValidRawPSK(password)) return false;
 
   // WiFi.begin() consumes C strings, so embedded NUL bytes cannot be stored as
   // part of an exact credential value.
@@ -1236,6 +1480,19 @@ bool ESP32WiFiPortal::validSTACredentials(const String& ssid,
   }
   for (size_t i = 0; i < passwordLength; ++i) {
     if (password[i] == '\0') return false;
+  }
+  return true;
+}
+
+bool ESP32WiFiPortal::isValidRawPSK(const String& password) {
+  if (password.length() != 64) return false;
+  for (size_t i = 0; i < password.length(); ++i) {
+    const char character = password[i];
+    const bool hexadecimal =
+        (character >= '0' && character <= '9') ||
+        (character >= 'a' && character <= 'f') ||
+        (character >= 'A' && character <= 'F');
+    if (!hexadecimal) return false;
   }
   return true;
 }
@@ -1311,7 +1568,7 @@ bool ESP32WiFiPortal::deserializeCredentialRecord(const uint8_t* record,
 
   const size_t ssidLength = record[8];
   const size_t passwordLength = record[9];
-  if (ssidLength == 0 || ssidLength > 32 || passwordLength > 63 ||
+  if (ssidLength == 0 || ssidLength > 32 || passwordLength > 64 ||
       (passwordLength > 0 && passwordLength < 8)) {
     return false;
   }
@@ -1350,18 +1607,18 @@ void ESP32WiFiPortal::secureClear(void* data, size_t length) {
 
 ESP32WiFiPortal::CredentialCacheStatus ESP32WiFiPortal::readCredentialBlob(
     Preferences& prefs,
+    const char* key,
     String& ssid,
     String& password) {
-  if (!prefs.isKey(kPrefsCredential)) {
+  if (!prefs.isKey(key)) {
     return CredentialCacheStatus::NotFound;
   }
-  if (prefs.getBytesLength(kPrefsCredential) != kCredentialRecordSize) {
+  if (prefs.getBytesLength(key) != kCredentialRecordSize) {
     return CredentialCacheStatus::Corrupt;
   }
 
   uint8_t record[kCredentialRecordSize];
-  const size_t bytesRead =
-      prefs.getBytes(kPrefsCredential, record, sizeof(record));
+  const size_t bytesRead = prefs.getBytes(key, record, sizeof(record));
   const bool valid = bytesRead == sizeof(record) &&
                      deserializeCredentialRecord(record, sizeof(record),
                                                  ssid, password);
@@ -1390,31 +1647,121 @@ bool ESP32WiFiPortal::writeCredentialRecord(Preferences& prefs,
                                             const String& ssid,
                                             const String& password) {
   uint8_t record[kCredentialRecordSize];
-  uint8_t readBack[kCredentialRecordSize];
   if (!serializeCredentialRecord(ssid, password, record, sizeof(record))) {
     secureClear(record, sizeof(record));
-    secureClear(readBack, sizeof(readBack));
     return false;
   }
 
-  const size_t bytesWritten =
-      prefs.putBytes(kPrefsCredential, record, sizeof(record));
-  bool valid = bytesWritten == sizeof(record) &&
-               prefs.getBytesLength(kPrefsCredential) == sizeof(record);
-  String verifiedSSID;
-  String verifiedPassword;
-  if (valid) {
-    const size_t bytesRead =
-        prefs.getBytes(kPrefsCredential, readBack, sizeof(readBack));
-    valid = bytesRead == sizeof(readBack) &&
-            deserializeCredentialRecord(readBack, sizeof(readBack),
-                                        verifiedSSID, verifiedPassword) &&
-            verifiedSSID == ssid && verifiedPassword == password;
+  String currentSSID;
+  String currentPassword;
+  const CredentialCacheStatus currentStatus = readCredentialBlob(
+      prefs, kPrefsCredential, currentSSID, currentPassword);
+  if (currentStatus == CredentialCacheStatus::Valid &&
+      currentSSID == ssid && currentPassword == password) {
+    if (prefs.isKey(kPrefsCredentialBackup)) {
+      prefs.remove(kPrefsCredentialBackup);
+    }
+    secureClear(record, sizeof(record));
+    return true;
   }
 
+  bool backupReady = false;
+  if (currentStatus == CredentialCacheStatus::Valid) {
+    uint8_t oldRecord[kCredentialRecordSize];
+    const bool serialized = serializeCredentialRecord(
+        currentSSID, currentPassword, oldRecord, sizeof(oldRecord));
+    backupReady = serialized && writeCredentialBytes(
+        prefs, kPrefsCredentialBackup, oldRecord,
+        currentSSID, currentPassword);
+    secureClear(oldRecord, sizeof(oldRecord));
+    if (!backupReady) {
+      secureClear(record, sizeof(record));
+      return false;
+    }
+  } else {
+    String backupSSID;
+    String backupPassword;
+    backupReady = readCredentialBlob(prefs, kPrefsCredentialBackup,
+                                     backupSSID, backupPassword) ==
+                  CredentialCacheStatus::Valid;
+
+    // If the primary became unreadable during an earlier failed update, the
+    // synchronized RAM cache is another valid source for the old value.
+    if (!backupReady && _credentialCacheStatus == CredentialCacheStatus::Valid &&
+        validSTACredentials(_savedSSID, _savedPassword)) {
+      uint8_t oldRecord[kCredentialRecordSize];
+      const bool serialized = serializeCredentialRecord(
+          _savedSSID, _savedPassword, oldRecord, sizeof(oldRecord));
+      backupReady = serialized && writeCredentialBytes(
+          prefs, kPrefsCredentialBackup, oldRecord,
+          _savedSSID, _savedPassword);
+      secureClear(oldRecord, sizeof(oldRecord));
+      if (!backupReady) {
+        secureClear(record, sizeof(record));
+        return false;
+      }
+    }
+  }
+
+  const bool valid = writeCredentialBytes(
+      prefs, kPrefsCredential, record, ssid, password);
   secureClear(record, sizeof(record));
-  secureClear(readBack, sizeof(readBack));
+  if (valid && prefs.isKey(kPrefsCredentialBackup)) {
+    // Failure here is harmless: on boot a valid primary always wins and the
+    // stale backup is removed opportunistically.
+    prefs.remove(kPrefsCredentialBackup);
+  }
   return valid;
+}
+
+bool ESP32WiFiPortal::writeCredentialBytes(
+    Preferences& prefs,
+    const char* key,
+    const uint8_t* record,
+    const String& expectedSSID,
+    const String& expectedPassword) {
+  if (!record || prefs.putBytes(key, record, kCredentialRecordSize) !=
+                     kCredentialRecordSize ||
+      prefs.getBytesLength(key) != kCredentialRecordSize) {
+    return false;
+  }
+
+  String verifiedSSID;
+  String verifiedPassword;
+  return readCredentialBlob(prefs, key, verifiedSSID, verifiedPassword) ==
+             CredentialCacheStatus::Valid &&
+         verifiedSSID == expectedSSID &&
+         verifiedPassword == expectedPassword;
+}
+
+bool ESP32WiFiPortal::writeCredentialEraseMarker(Preferences& prefs) {
+  static const uint8_t marker[] = {'E', 'W', 'P', 'X'};
+  uint8_t readBack[sizeof(marker)] = {};
+  if (prefs.putBytes(kPrefsCredentialEraseMarker, marker, sizeof(marker)) !=
+          sizeof(marker) ||
+      prefs.getBytesLength(kPrefsCredentialEraseMarker) != sizeof(marker) ||
+      prefs.getBytes(kPrefsCredentialEraseMarker, readBack,
+                     sizeof(readBack)) != sizeof(readBack)) {
+    return false;
+  }
+  return memcmp(marker, readBack, sizeof(marker)) == 0;
+}
+
+bool ESP32WiFiPortal::removeStoredCredentials(Preferences& prefs) {
+  bool removed = true;
+  if (prefs.isKey(kPrefsCredential)) {
+    removed = prefs.remove(kPrefsCredential) && removed;
+  }
+  if (prefs.isKey(kPrefsCredentialBackup)) {
+    removed = prefs.remove(kPrefsCredentialBackup) && removed;
+  }
+  if (prefs.isKey(kPrefsSSID)) {
+    removed = prefs.remove(kPrefsSSID) && removed;
+  }
+  if (prefs.isKey(kPrefsPassword)) {
+    removed = prefs.remove(kPrefsPassword) && removed;
+  }
+  return removed;
 }
 
 void ESP32WiFiPortal::clearCredentialCache(CredentialCacheStatus status) {
@@ -1437,23 +1784,45 @@ bool ESP32WiFiPortal::eraseCredentials(bool disconnect) {
     setError("Unable to open NVS namespace");
     return false;
   }
-  bool ok = true;
-  if (prefs.isKey(kPrefsCredential)) ok = prefs.remove(kPrefsCredential) && ok;
-  if (prefs.isKey(kPrefsSSID)) ok = prefs.remove(kPrefsSSID) && ok;
-  if (prefs.isKey(kPrefsPassword)) ok = prefs.remove(kPrefsPassword) && ok;
+  // Commit the erase intent before deleting either transactional record. If
+  // power is lost between removes, boot sees the marker and refuses to restore
+  // the surviving backup/legacy value.
+  const bool markerWritten = writeCredentialEraseMarker(prefs);
+  bool ok = false;
+  if (markerWritten) {
+    const bool removed = removeStoredCredentials(prefs);
+    ok = removed && prefs.remove(kPrefsCredentialEraseMarker);
+  }
   prefs.end();
 
   if (ok) {
     clearCredentialCache(CredentialCacheStatus::NotFound);
   } else {
     clearCredentialCache(CredentialCacheStatus::Unknown);
+    setError(markerWritten
+                 ? "Credential erase is incomplete; the erase marker prevents recovery"
+                 : "Unable to verify the credential erase marker");
   }
 
   if (disconnect) {
+    if (!ensureWiFiEventHandler()) {
+      if (ok) {
+        setError("Credentials erased, but Wi-Fi disconnect requires ownership");
+      }
+      return false;
+    }
     cancelAutoReconnect(true);
     stopConfigPortal();
-    WiFi.disconnect(true, true);
-    _state = State::Idle;
+    const bool wasConnected = WiFi.status() == WL_CONNECTED;
+    const bool disconnected = WiFi.disconnect(true, true);
+    const bool connectedAfterDisconnect = WiFi.status() == WL_CONNECTED;
+    if (!disconnected && wasConnected && connectedAfterDisconnect) {
+      setError("Credentials erased, but the STA interface did not disconnect");
+      _state = State::Failed;
+      ok = false;
+    } else {
+      _state = connectedAfterDisconnect ? State::Connected : State::Idle;
+    }
   }
   return ok;
 }
@@ -1529,9 +1898,13 @@ bool ESP32WiFiPortal::isSTAStaticIPConfigured() const {
 }
 
 void ESP32WiFiPortal::setAutoReconnect(bool enabled) {
-  ensureWiFiEventHandler();
-  WiFi.setAutoReconnect(false);
+  if (!ensureWiFiEventHandler()) return;
+  if (!WiFi.setAutoReconnect(false)) {
+    setError("Unable to disable the Arduino Wi-Fi reconnect policy");
+    return;
+  }
   _autoReconnectEnabled = enabled;
+  _lastError = "";
 
   if (!enabled) {
     const bool hadActiveReconnect =
@@ -1540,9 +1913,7 @@ void ESP32WiFiPortal::setAutoReconnect(bool enabled) {
         _reconnectScheduled || hadActiveReconnect;
     cancelAutoReconnect(true);
     if (wasReconnecting) {
-      _state = !hadActiveReconnect && WiFi.status() == WL_CONNECTED
-                   ? State::Connected
-                   : State::Idle;
+      _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Idle;
     }
     return;
   }
@@ -1575,8 +1946,19 @@ bool ESP32WiFiPortal::setConnectionRetryPolicy(
   return true;
 }
 
-void ESP32WiFiPortal::setHostname(const char* hostname) {
+bool ESP32WiFiPortal::setHostname(const char* hostname) {
+  if (_wifiEventHandlerId != 0) {
+    setError("Hostname must be configured before the first Wi-Fi operation");
+    return false;
+  }
+  if (hostname && strlen(hostname) > 31) {
+    setError("Hostname must contain at most 31 bytes");
+    return false;
+  }
+
   _hostname = hostname ? hostname : "";
+  _lastError = "";
+  return true;
 }
 
 void ESP32WiFiPortal::setConnectTimeout(uint32_t timeoutMs) {

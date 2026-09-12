@@ -4,8 +4,8 @@
 
 ## Runtime flow
 
-1. `connectSaved()` validates the single `cred_blob` record in the
-   Preferences/NVS namespace `ewp_wifi`, migrating a complete legacy
+1. `connectSaved()` validates the primary `cred_blob`, recovers from a verified
+   `cred_backup` when an update was interrupted, and migrates a complete legacy
    `ssid`/`pass` pair when needed.
 2. The library applies DHCP or the validated static STA IP/DNS configuration.
 3. The ESP32 attempts the STA connection and `WiFi.onEvent()` reports link/IP
@@ -21,10 +21,10 @@
    keeps the values temporarily in RAM.
 10. `process()` starts and monitors the candidate STA connection while the SoftAP
    remains available.
-11. Only a successful candidate connection is serialized and written with one
-    NVS `putBytes()`. Exact read-back plus CRC validation must pass before the
-    RAM cache changes. The portal then stops while the connected STA interface
-    remains active.
+11. Only a successful candidate connection is serialized. Existing credentials
+    are protected by a verified backup before the primary is updated. Exact
+    read-back plus CRC validation must pass before the RAM cache changes. The
+    portal then stops while the connected STA interface remains active.
 
 ## Credential record and migration
 
@@ -37,7 +37,7 @@ struct packing. Its 112-byte little-endian layout is:
 | 4 | 2 | Format version (`1`) |
 | 6 | 2 | Record size (`112`) |
 | 8 | 1 | SSID byte length (`1..32`) |
-| 9 | 1 | Password byte length (`0` or `8..63`) |
+| 9 | 1 | Password byte length (`0`, `8..63`, or a 64-digit hexadecimal PSK) |
 | 10 | 33 | Zero-padded SSID storage |
 | 43 | 65 | Zero-padded password storage |
 | 108 | 4 | CRC32 over bytes `0..107` |
@@ -53,8 +53,23 @@ unavailable NVS, and corrupt. A corrupt record is not cached, is not handed to
 `WiFi.begin()`, and does not enter the reconnect loop. Temporary NVS open/write
 failure is retried only after the normal reconnect cooldown.
 
-Migration prefers a valid blob. If no valid blob exists but both legacy keys
-form a valid pair, it writes and reads back the blob before deleting either
+The primary `cred_blob` is authoritative when valid. Updating an existing value
+first serializes it into `cred_backup`, verifies exact read-back and CRC, then
+writes and verifies the new primary. The backup is removed only after commit. A
+reset before the primary update sees the old primary; a reset during it sees the
+backup; a reset after it sees the new primary. A valid backup can therefore
+repair a partial primary without inventing a mixed credential pair. Saving the
+same credential is a no-op to reduce NVS wear.
+
+Explicit erase uses a separate `cred_erased` tombstone. It is verified before
+any primary, backup, or legacy key is removed and deleted only after all those
+removes succeed. Any marker presence on boot is fail-closed—even if an
+interrupted marker write left a short value—so cleanup resumes without loading
+a surviving old record. A later successful provisioning transaction removes the
+marker only after the new primary has passed exact read-back and CRC validation.
+
+Migration prefers a valid primary. If no valid primary or backup exists but
+both legacy keys form a valid pair, it writes and reads back the blob before deleting either
 legacy key. Thus a reset during migration leaves either the old complete pair,
 the new verified blob, or a detectable invalid partial write—never a newly
 constructed mixed SSID/password pair. A valid blob plus stale legacy keys is
@@ -130,11 +145,15 @@ their compatibility loops.
 
 The event handler is installed lazily, avoiding static-initialization ordering
 problems for globally declared portal objects. The Arduino event task may set
-only atomic bits and the latest disconnect reason. `process()` drains those bits
+only atomic bits, the latest disconnect reason, and a latched credential-failure
+reason. `process()` drains those bits
 and performs all state transitions, logs, callbacks, retries, and reconnects in
 the application context.
 
 Arduino-ESP32's native Auto Reconnect is disabled after handler registration.
+The driver is configured for RAM-only Wi-Fi configuration storage, preventing
+managed reconnect attempts from wearing the core's separate NVS credential
+record. The library's own transactional Preferences records remain durable.
 This leaves exactly one owner for connection timing:
 
 - blocking saved connections use the same attempt setup and finite retry policy;
@@ -151,6 +170,15 @@ This leaves exactly one owner for connection timing:
 All elapsed-time tests use unsigned `millis()` subtraction and remain safe across
 timer overflow.
 
+Because Arduino-ESP32 provides a global `WiFi` singleton, only one live portal
+instance may own it. A second instance fails before changing mode, persistence,
+reconnect policy, or connection state. `stopConfigPortal()` retains ownership
+because STA events/reconnects still belong to that manager; destruction restores
+the previous core reconnect policy and releases ownership.
+Runtime public methods are designed for one application task; the Wi-Fi event
+task communicates only through atomics. Hostname configuration is accepted only
+before first use and is applied before `WiFi.mode()`/`WiFi.begin()`.
+
 `setConnectTimeout(0)` and `connectSaved(0)` are normalized to 15000 ms. Portal
 candidates, blocking saved connections, and every Auto Reconnect attempt
 therefore have a finite deadline; `process()` contains no wait loop and advances
@@ -162,8 +190,9 @@ at most the currently ready state transition.
   path around `WiFi.config()`, `WiFi.begin()`, and `WiFi.disconnect()`.
 - At most one library-managed STA attempt can be active.
 - A candidate that fails to connect never starts an NVS credential write.
-- A failed/short blob write never updates the RAM cache and remains detectable
-  by exact record-size and CRC checks on reboot.
+- A failed or short update never changes the RAM cache; reboot selects the
+  verified old backup or the complete new primary using exact size/value/CRC
+  checks.
 - Credentials are read into a synchronized object cache once and reused by
   reconnect attempts; successful saves and erases update that cache.
 - Closing or timing out an unsuccessful Portal schedules the saved credentials
@@ -177,7 +206,8 @@ at most the currently ready state transition.
 - `connectSaved()` stops an active portal before switching to `WIFI_STA`.
 - `eraseCredentials(true)` coordinates successful NVS erasure with portal cleanup
   and Wi-Fi disconnection, so server and Wi-Fi state cannot diverge.
-- `eraseCredentials()` removes `cred_blob`, `ssid`, and `pass` explicitly while
+- `eraseCredentials()` commits `cred_erased`, removes `cred_blob`,
+  `cred_backup`, `ssid`, and `pass`, then removes the marker explicitly while
   leaving unrelated namespace values untouched.
 
 ## Heap behavior on repeated paths
@@ -188,8 +218,10 @@ constructing short-lived `String` objects. Candidate buffers retain their small
 credential-sized capacity between Portal submissions and are synchronized with
 the cache only after a successful connection and NVS commit.
 
-Portal scan/status JSON shares one reserved response buffer while the Portal is
-active. Scan duplicate detection keeps compact SSID hashes and performs an exact
+Portal scan/status/properties JSON shares one reserved response buffer while the
+Portal is active. Properties uses fixed-size MAC buffers and is generated only
+when requested, so opening the view repeatedly does not create a background
+polling workload. Scan duplicate detection keeps compact SSID hashes and performs an exact
 SSID comparison on a hash match, avoiding the previous repeated `WiFi.SSID()`
 allocations for every earlier scan result. The driver scan itself is asynchronous;
 `process()` only polls its state, while the browser polls `/scan` after HTTP `202`.

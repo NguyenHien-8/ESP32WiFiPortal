@@ -16,7 +16,9 @@ struct FakePreferencesState {
   bool opened = false;
   bool readOnly = true;
   size_t putBytesLimit = std::numeric_limits<size_t>::max();
+  std::vector<size_t> putBytesLimits;
   size_t getBytesLimit = std::numeric_limits<size_t>::max();
+  std::vector<bool> removeResults;
   uint32_t beginCalls = 0;
   uint32_t putBytesCalls = 0;
   uint32_t removeCalls = 0;
@@ -74,7 +76,13 @@ public:
   size_t putBytes(const char* key, const void* value, size_t length) {
     ++FakePreferences.putBytesCalls;
     if (!FakePreferences.opened || FakePreferences.readOnly || !value) return 0;
-    const size_t written = std::min(length, FakePreferences.putBytesLimit);
+    size_t limit = FakePreferences.putBytesLimit;
+    if (!FakePreferences.putBytesLimits.empty()) {
+      limit = FakePreferences.putBytesLimits.front();
+      FakePreferences.putBytesLimits.erase(
+          FakePreferences.putBytesLimits.begin());
+    }
+    const size_t written = std::min(length, limit);
     const uint8_t* bytes = static_cast<const uint8_t*>(value);
     FakePreferences.bytes[key ? key : ""] =
         std::vector<uint8_t>(bytes, bytes + written);
@@ -83,8 +91,12 @@ public:
 
   bool remove(const char* key) {
     ++FakePreferences.removeCalls;
-    if (!FakePreferences.opened || FakePreferences.readOnly ||
-        !FakePreferences.removeResult) {
+    bool result = FakePreferences.removeResult;
+    if (!FakePreferences.removeResults.empty()) {
+      result = FakePreferences.removeResults.front();
+      FakePreferences.removeResults.erase(FakePreferences.removeResults.begin());
+    }
+    if (!FakePreferences.opened || FakePreferences.readOnly || !result) {
       return false;
     }
     const std::string name(key ? key : "");
