@@ -3,7 +3,7 @@
 
 #include <PortalPage.h>
 
-#include <cassert>
+#include "host/TestAssert.h"
 #include <iostream>
 #include <string>
 
@@ -46,7 +46,7 @@ size_t countOccurrences(const std::string& value,
 
 int main() {
   const std::string page(EWP_PORTAL_HTML);
-  assert(page.find("id=\"advancedLink\" href=\"#advanced\">Advanced View</a>") !=
+  assert(page.find("id=\"advancedLink\" href=\"#advanced\">More Wi-Fi settings</a>") !=
          std::string::npos);
   assert(page.find("id=\"advancedView\"") != std::string::npos);
   assert(page.find("id=\"manualView\"") != std::string::npos);
@@ -84,6 +84,10 @@ int main() {
          std::string::npos);
   assert(page.find("id=\"manualPassword\" name=\"manual-password\" type=\"password\"") !=
          std::string::npos);
+  assert(page.find("id=\"manualPassword\" name=\"manual-password\" type=\"password\" maxlength=\"64\"") !=
+         std::string::npos);
+  assert(page.find("input.maxLength=64") != std::string::npos);
+  assert(page.find("^[0-9a-f]{64}$") != std::string::npos);
   assert(page.find("manualReveal.onclick") != std::string::npos);
   assert(page.find("if(submitting)return") != std::string::npos);
   assert(page.find("aria-pressed") != std::string::npos);
@@ -119,6 +123,8 @@ int main() {
   expectSaveValidation(std::string(33, 'S'), "12345678", 400);
   expectSaveValidation("Secured", "1234567", 400);
   expectSaveValidation("Secured", std::string(64, 'P'), 400);
+  expectSaveValidation("Raw PSK", std::string(64, 'A'), 200, "Raw PSK");
+  expectSaveValidation("Secured", std::string(65, 'A'), 400);
 
   std::cout << "Advanced portal UI and exact credential validation tests passed\n";
   return 0;

@@ -39,20 +39,12 @@ uint32_t crc32IEEE(const uint8_t* data, size_t length) {
   return crc ^ 0xFFFFFFFFUL;
 }
 
-const char* credentialIntegrity() {
-  static char result[12];
-  Preferences prefs;
-  if (!prefs.begin("ewp_wifi", true)) return "nvs-error";
-  if (!prefs.isKey("cred_blob")) {
-    prefs.end();
-    return "missing";
-  }
-
+bool credentialRecordValid(Preferences& prefs, const char* key) {
+  if (!prefs.isKey(key)) return false;
   uint8_t record[CREDENTIAL_RECORD_SIZE];
   const bool exactSize =
-      prefs.getBytesLength("cred_blob") == sizeof(record) &&
-      prefs.getBytes("cred_blob", record, sizeof(record)) == sizeof(record);
-  prefs.end();
+      prefs.getBytesLength(key) == sizeof(record) &&
+      prefs.getBytes(key, record, sizeof(record)) == sizeof(record);
   bool valid = exactSize;
   if (valid) {
     const uint32_t magic = static_cast<uint32_t>(record[0]) |
@@ -68,17 +60,43 @@ const char* credentialIntegrity() {
         (static_cast<uint32_t>(record[CREDENTIAL_CRC_OFFSET + 1]) << 8) |
         (static_cast<uint32_t>(record[CREDENTIAL_CRC_OFFSET + 2]) << 16) |
         (static_cast<uint32_t>(record[CREDENTIAL_CRC_OFFSET + 3]) << 24);
+    const bool rawPSK = record[9] == 64;
+    bool rawPSKIsHex = true;
+    if (rawPSK) {
+      for (size_t i = 0; i < 64; ++i) {
+        const uint8_t character = record[43 + i];
+        if (!((character >= '0' && character <= '9') ||
+              (character >= 'a' && character <= 'f') ||
+              (character >= 'A' && character <= 'F'))) {
+          rawPSKIsHex = false;
+          break;
+        }
+      }
+    }
     valid = magic == 0x43505745UL && version == 1 &&
             size == CREDENTIAL_RECORD_SIZE && record[8] >= 1 &&
-            record[8] <= 32 && record[9] <= 63 &&
+            record[8] <= 32 && record[9] <= 64 &&
             (record[9] == 0 || record[9] >= 8) &&
+            (!rawPSK || rawPSKIsHex) &&
             storedCRC == crc32IEEE(record, CREDENTIAL_CRC_OFFSET);
   }
 
   volatile uint8_t* wipe = record;
   for (size_t i = 0; i < sizeof(record); ++i) wipe[i] = 0;
-  snprintf(result, sizeof(result), "%s", valid ? "valid" : "invalid");
-  return result;
+  return valid;
+}
+
+const char* credentialIntegrity() {
+  Preferences prefs;
+  if (!prefs.begin("ewp_wifi", true)) return "nvs-error";
+  const bool hasPrimary = prefs.isKey("cred_blob");
+  const bool hasBackup = prefs.isKey("cred_backup");
+  const bool primaryValid = credentialRecordValid(prefs, "cred_blob");
+  const bool backupValid = credentialRecordValid(prefs, "cred_backup");
+  prefs.end();
+  if (primaryValid) return "valid";
+  if (backupValid) return "backup-valid";
+  return hasPrimary || hasBackup ? "invalid" : "missing";
 }
 
 void updateLinkMetrics(uint64_t now) {

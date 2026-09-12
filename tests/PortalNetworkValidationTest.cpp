@@ -1,6 +1,6 @@
 #include "host/TestAccess.h"
 
-#include <cassert>
+#include "host/TestAssert.h"
 #include <iostream>
 
 namespace {

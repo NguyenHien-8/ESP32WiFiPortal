@@ -1,6 +1,6 @@
 #include "FakeRuntime.h"
 
-#include <cassert>
+#include "TestAssert.h"
 
 FakeSerialClass Serial;
 FakeESPState FakeESP;
@@ -32,4 +32,11 @@ void resetFakeRuntime(bool preservePreferences) {
     FakePreferences.bytes = savedBytes;
     FakePreferences.strings = savedStrings;
   }
+}
+
+void emitWiFiEvent(arduino_event_id_t event, uint8_t reason) {
+  if (!FakeWiFi.eventHandler) return;
+  arduino_event_info_t info;
+  info.wifi_sta_disconnected.reason = reason;
+  FakeWiFi.eventHandler(event, info);
 }

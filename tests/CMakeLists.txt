@@ -17,11 +17,15 @@ target_include_directories(fake_esp32_portal PUBLIC
   ../src
 )
 
-if(MSVC)
-  target_compile_options(fake_esp32_portal PRIVATE /W4 /permissive-)
-else()
-  target_compile_options(fake_esp32_portal PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+function(ewp_enable_strict_warnings target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endfunction()
+
+ewp_enable_strict_warnings(fake_esp32_portal)
 
 add_executable(portal_network_validation PortalNetworkValidationTest.cpp)
 target_link_libraries(portal_network_validation PRIVATE fake_esp32_portal)
@@ -50,3 +54,25 @@ add_executable(header_odr
 )
 target_link_libraries(header_odr PRIVATE fake_esp32_portal)
 add_test(NAME header_odr COMMAND header_odr)
+
+add_executable(wifi_driver_policy WiFiDriverPolicyTest.cpp)
+target_link_libraries(wifi_driver_policy PRIVATE fake_esp32_portal)
+add_test(NAME wifi_driver_policy COMMAND wifi_driver_policy)
+
+add_executable(portal_scan PortalScanTest.cpp)
+target_link_libraries(portal_scan PRIVATE fake_esp32_portal)
+add_test(NAME portal_scan COMMAND portal_scan)
+
+set(EWP_TEST_EXECUTABLES
+  portal_network_validation
+  portal_lifecycle
+  credential_storage
+  auto_reconnect
+  portal_page
+  header_odr
+  wifi_driver_policy
+  portal_scan
+)
+foreach(target IN LISTS EWP_TEST_EXECUTABLES)
+  ewp_enable_strict_warnings(${target})
+endforeach()

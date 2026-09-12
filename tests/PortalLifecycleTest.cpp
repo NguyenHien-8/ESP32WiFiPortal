@@ -2,7 +2,7 @@
 #include "host/TestAccess.h"
 
 #include <algorithm>
-#include <cassert>
+#include "host/TestAssert.h"
 #include <cstdint>
 #include <iostream>
 #include <string>

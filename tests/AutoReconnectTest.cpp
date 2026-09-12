@@ -1,7 +1,7 @@
 #include "host/FakeRuntime.h"
 #include "host/TestAccess.h"
 
-#include <cassert>
+#include "host/TestAssert.h"
 #include <cstdint>
 #include <iostream>
 

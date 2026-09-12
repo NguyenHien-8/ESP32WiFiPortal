@@ -108,7 +108,9 @@ public:
                                 uint32_t retryIntervalMs,
                                 uint32_t maxRetryIntervalMs);
 
-  void setHostname(const char* hostname);
+  // Configure before the first Wi-Fi operation. Arduino-ESP32 2.x stores at
+  // most 31 hostname bytes plus the terminator.
+  bool setHostname(const char* hostname);
   void setConnectTimeout(uint32_t timeoutMs);
   void setAPChannel(uint8_t channel);
   void setAPHidden(bool hidden);
@@ -182,6 +184,7 @@ private:
   static constexpr uint16_t kHttpPort = 80;
   static constexpr const char* kPrefsNamespace = "ewp_wifi";
   static constexpr const char* kPrefsCredential = "cred_blob";
+  static constexpr const char* kPrefsCredentialBackup = "cred_backup";
   static constexpr const char* kPrefsSSID = "ssid";
   static constexpr const char* kPrefsPassword = "pass";
   static constexpr uint32_t kCredentialMagic = 0x43505745UL;  // "EWPC"
@@ -364,7 +367,7 @@ private:
   bool applySTAConfig();
   void releaseSTAConnection();
   void cancelSTAConnection();
-  void ensureWiFiEventHandler();
+  bool ensureWiFiEventHandler();
   void processWiFiEvents();
   void processAutoReconnect();
   void scheduleAutoReconnect(uint32_t delayMs);
@@ -387,6 +390,7 @@ private:
                                           String& password);
   static void secureClear(void* data, size_t length);
   CredentialCacheStatus readCredentialBlob(Preferences& prefs,
+                                           const char* key,
                                            String& ssid,
                                            String& password);
   CredentialCacheStatus readLegacyCredentials(Preferences& prefs,
@@ -395,7 +399,13 @@ private:
   bool writeCredentialRecord(Preferences& prefs,
                              const String& ssid,
                              const String& password);
+  bool writeCredentialBytes(Preferences& prefs,
+                            const char* key,
+                            const uint8_t* record,
+                            const String& expectedSSID,
+                            const String& expectedPassword);
   void clearCredentialCache(CredentialCacheStatus status);
+  static bool isValidRawPSK(const String& password);
   bool validAPPassword(const char* password) const;
   bool portalTimedOut() const;
   bool isCredentialFailureReason(uint8_t reason) const;
@@ -457,6 +467,7 @@ private:
   bool _coreAutoReconnectWasEnabled = false;
   std::atomic<uint32_t> _wifiEventBits{0};
   std::atomic<uint32_t> _eventDisconnectReason{0};
+  std::atomic<uint32_t> _eventCredentialFailureReason{0};
   uint8_t _lastDisconnectReason = 0;
 
   String _hostname;
