@@ -64,7 +64,7 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 <main class="shell">
 <div id="scanView">
 <header class="top">
-<div><h1>Wi-Fi</h1><a class="advanced-link" id="advancedLink" href="#advanced">More Wi-Fi settings</a></div>
+<div><h1>Wi-Fi Portal</h1><a class="advanced-link" id="advancedLink" href="#advanced">Manual Configure Wi-Fi</a></div>
 <button class="icon-btn" id="refresh" type="button" aria-label="Scan for Wi-Fi networks" title="Refresh networks">
 <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.66 6.34A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.16.68 4.24 1.76L13 11h8V3l-3.34 3.34Z"/></svg>
 </button>
@@ -75,7 +75,7 @@ h1{font-size:1.55rem;font-weight:600;margin:0}.brand{margin:2px 0 0;color:#5b5b5
 </div>
 <section class="advanced-view" id="advancedView" aria-labelledby="advancedTitle" hidden>
 <a class="back-link" id="advancedBack" href="#scan">Back Home Screen</a>
-<h2 id="advancedTitle">More Wi-Fi Settings</h2>
+<h2 id="advancedTitle">Manual Configure Wi-Fi</h2>
 <form class="manual-form" id="manualForm" novalidate>
 <label class="field-label" for="manualSSID"><span>Network name</span><input class="text-input" id="manualSSID" name="manual-ssid" maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" required></label>
 <label class="field-label" for="manualPassword"><span>Password</span><span class="password-field"><input class="password-input" id="manualPassword" name="manual-password" type="password" maxlength="63" autocomplete="current-password" placeholder="Leave empty for an open network"><button class="password-reveal" id="manualReveal" type="button" aria-label="Show password" aria-pressed="false" title="Show password"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/></svg></button></span></label>
