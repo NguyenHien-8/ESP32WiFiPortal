@@ -1,10 +1,12 @@
 # ESP32WiFiPortal 2.1.2
 
+![GitHub repo size](https://img.shields.io/github/repo-size/NguyenHien-8/ESP32WiFiPortal)
+[![GitHub license](https://img.shields.io/github/license/NguyenHien-8/ESP32WiFiPortal)](https://github.com/NguyenHien-8/ESP32WiFiPortal/blob/master/LICENSE)
 [![ESP32 WROOM](https://img.shields.io/badge/ESP-32WROOM-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32)
 [![ESP32 S2](https://img.shields.io/badge/ESP-32S2-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-s2)
+[![ESP32 S3](https://img.shields.io/badge/ESP-32S3-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-S3)
 [![ESP32 C3](https://img.shields.io/badge/ESP-32C3-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-c3)
 [![ESP32 C6](https://img.shields.io/badge/ESP-32C6-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-c6)
-[![ESP32 S3](https://img.shields.io/badge/ESP-32S3-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-S3)
 
 <p align="center">
   <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="23%">
