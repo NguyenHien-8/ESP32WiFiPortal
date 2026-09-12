@@ -83,10 +83,4 @@ scenarios:
    selects a complete old/new record or rejects corruption—never mixed fields.
 6. At least 72 continuous idle hours after the fault scenarios, with no
    unexpected reset, reconnect storm, monotonic heap loss, or invalid CRC.
-
-The sketch reports `credential_crc=backup-valid` when an interrupted primary
-update still has a recoverable verified backup, and `erase-pending` while the
-erase tombstone is present. It emits
-`SOAK_72H_DURATION_REACHED` when duration alone is met. This is not an automatic
-PASS; the complete scenario log still needs review. No 72-hour hardware run was
-performed as part of the 2026-09-12 source audit.
+   
