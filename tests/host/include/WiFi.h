@@ -54,6 +54,10 @@ struct FakeWiFiState {
   IPAddress runtimeIP;
   IPAddress runtimeSubnet;
   IPAddress staIP;
+  IPAddress staGateway;
+  IPAddress staSubnet;
+  uint8_t apMAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
+  uint8_t staMAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02};
   wl_status_t status = WL_DISCONNECTED;
   wl_status_t beginResult = WL_IDLE_STATUS;
   String lastSSID;
@@ -103,6 +107,10 @@ public:
 
   IPAddress softAPIP() const { return FakeWiFi.runtimeIP; }
   IPAddress softAPSubnetMask() const { return FakeWiFi.runtimeSubnet; }
+  uint8_t* softAPmacAddress(uint8_t* address) const {
+    if (address) memcpy(address, FakeWiFi.apMAC, sizeof(FakeWiFi.apMAC));
+    return address;
+  }
   bool softAPdisconnect(bool) {
     ++FakeWiFi.softAPDisconnectCalls;
     FakeWiFi.apActive = false;
@@ -138,6 +146,12 @@ public:
     return FakeWiFi.beginResult;
   }
   IPAddress localIP() const { return FakeWiFi.staIP; }
+  IPAddress gatewayIP() const { return FakeWiFi.staGateway; }
+  IPAddress subnetMask() const { return FakeWiFi.staSubnet; }
+  uint8_t* macAddress(uint8_t* address) const {
+    if (address) memcpy(address, FakeWiFi.staMAC, sizeof(FakeWiFi.staMAC));
+    return address;
+  }
   const char* disconnectReasonName(wifi_err_reason_t) const { return "fake"; }
 };
 

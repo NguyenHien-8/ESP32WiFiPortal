@@ -2,8 +2,8 @@
  * @file ESP32WiFiPortal.h
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library header
- * @version 2.1.1
- * @date 2026-09-10
+ * @version 2.1.2
+ * @date 2026-09-12
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
@@ -202,6 +202,7 @@ private:
   static constexpr uint32_t kEventSTADisconnected = 1UL << 2;
   static constexpr uint32_t kSTADisconnectSettleMs = 20;
   static constexpr uint32_t kScanTimeoutMs = 15000;
+  static constexpr uint32_t kRestartDelayMs = 350;
 
   // Allocation-free IPv4 helpers live in the class so Portal and STA policy
   // share only their low-level primitives. Definitions inside the class are
@@ -347,6 +348,8 @@ private:
   void handleScan();
   void handleSave();
   void handleStatus();
+  void handleProperties();
+  void handleReset();
   void handleNotFound();
   void handleCaptiveProbe();
   void processScan();
@@ -412,6 +415,7 @@ private:
   bool _connectAttemptActive = false;
   bool _attemptTerminalFailure = false;
   bool _staDisconnected = false;
+  bool _restartPending = false;
 
   uint32_t _connectTimeoutMs = kDefaultConnectTimeoutMs;
   uint32_t _portalTimeoutMs = 0;
@@ -421,6 +425,7 @@ private:
   uint32_t _connectPendingDelayMs = 350;
   uint32_t _connectionPhaseAt = 0;
   uint32_t _connectionSettleDelayMs = 0;
+  uint32_t _restartRequestedAt = 0;
 
   uint8_t _maxConnectionRetries = 0;
   uint8_t _portalRetriesUsed = 0;

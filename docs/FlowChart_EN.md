@@ -1,6 +1,6 @@
-# ESP32WiFiPortal 2.1.1 Operational Flowcharts
+# ESP32WiFiPortal 2.1.2 Operational Flowcharts
 
-This document describes the state machine of `ESP32WiFiPortal` 2.1.1 for blocking connections, blocking/non-blocking Config Portal operation, Wi-Fi events, retries, Auto Reconnect, and asynchronous Wi-Fi scanning.
+This document describes the state machine of `ESP32WiFiPortal` 2.1.2 for blocking connections, blocking/non-blocking Config Portal operation, Wi-Fi events, retries, Auto Reconnect, and asynchronous Wi-Fi scanning.
 
 ## STA Address Configuration
 

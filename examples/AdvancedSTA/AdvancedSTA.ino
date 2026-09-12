@@ -2,7 +2,7 @@
  * @file AdvancedSTA.ino
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief Example sketch demonstrating advanced STA configuration using ESP32WiFiPortal library.
- * @version 2.1.1
+ * @version 2.1.2
  * @date 2026-09-10
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.

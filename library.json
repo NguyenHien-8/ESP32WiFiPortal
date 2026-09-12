@@ -1,6 +1,6 @@
 {
   "name": "ESP32WiFiPortal",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "ESP32 Wi-Fi captive portal, static STA networking, reconnect, and credential manager.",
   "keywords": ["esp32", "wifi", "captive-portal", "provisioning", "reconnect", "nvs"],
   "repository": {

@@ -188,8 +188,10 @@ constructing short-lived `String` objects. Candidate buffers retain their small
 credential-sized capacity between Portal submissions and are synchronized with
 the cache only after a successful connection and NVS commit.
 
-Portal scan/status JSON shares one reserved response buffer while the Portal is
-active. Scan duplicate detection keeps compact SSID hashes and performs an exact
+Portal scan/status/properties JSON shares one reserved response buffer while the
+Portal is active. Properties uses fixed-size MAC buffers and is generated only
+when requested, so opening the view repeatedly does not create a background
+polling workload. Scan duplicate detection keeps compact SSID hashes and performs an exact
 SSID comparison on a hash match, avoiding the previous repeated `WiFi.SSID()`
 allocations for every earlier scan result. The driver scan itself is asynchronous;
 `process()` only polls its state, while the browser polls `/scan` after HTTP `202`.

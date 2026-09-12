@@ -32,9 +32,12 @@ The Arduino matrix covers all six examples plus
 - Explicit erase of `cred_blob`, `ssid`, and `pass`.
 - 10-second, 15-second, and zero-normalized connection timeouts; retry burst,
   capped cooldown, successful recovery, and `millis()` wrap-around.
-- Advanced manual Portal route, exact whitespace-preserving SSID handling,
-  browser markup/behavior invariants, server-side boundaries, double-submit
-  guard, password-storage check, and fixed-shape progress animation.
+- Advanced/manual/properties Portal navigation, exact whitespace-preserving SSID
+  handling, runtime property JSON, browser markup/behavior invariants,
+  server-side boundaries, double-submit guard, password-storage check, and
+  fixed-shape progress animation.
+- POST-only reset acknowledgement, deferred non-blocking restart, repeated
+  request idempotence, credential preservation, and `millis()` wrap-around.
 - Existing custom Portal IP validation, DNS/HTTP lifecycle, cleanup, restart,
   and multi-translation-unit header behavior.
 

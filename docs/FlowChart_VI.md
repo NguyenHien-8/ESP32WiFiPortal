@@ -1,6 +1,6 @@
-# Lưu đồ hoạt động ESP32WiFiPortal 2.1.1
+# Lưu đồ hoạt động ESP32WiFiPortal 2.1.2
 
-Tài liệu này mô tả state machine của `ESP32WiFiPortal` 2.1.1 cho kết nối blocking, Config Portal blocking/non-blocking, Wi-Fi event, retry, Auto Reconnect và Wi-Fi scan bất đồng bộ.
+Tài liệu này mô tả state machine của `ESP32WiFiPortal` 2.1.2 cho kết nối blocking, Config Portal blocking/non-blocking, Wi-Fi event, retry, Auto Reconnect và Wi-Fi scan bất đồng bộ.
 
 ## Cấu hình địa chỉ STA
 

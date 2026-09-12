@@ -1,4 +1,4 @@
-# ESP32WiFiPortal 2.1.1
+# ESP32WiFiPortal 2.1.2
 
 <p align="center">
   <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="23%">
@@ -18,7 +18,7 @@
 - Automatic recovery of the last saved Wi-Fi after an unsuccessful Portal session
 - Asynchronous Wi-Fi scanning and CRC-checked single-record NVS credentials
 - Power-loss-safe migration from the legacy `ssid`/`pass` key pair
-- Advanced manual entry for hidden or unlisted Wi-Fi networks
+- Advanced manual entry, runtime device properties, and deferred reboot control
 - Blocking, non-blocking, and on-demand portal modes
 - Safe cancellation of pending STA attempts when the portal stops or times out
 - No third-party runtime dependency
@@ -182,14 +182,15 @@ physical security remain application/deployment responsibilities.
 
 ## Captive portal UI
 
-The normal scan list remains the default view. The underlined
-**Advanced Wi-Fi Setting** link directly below the portal brand opens a manual
-form for hidden or unlisted networks and includes a keyboard-accessible Back
-link. SSIDs are submitted exactly as entered, including leading/trailing spaces,
-and are validated as 1-32 bytes. Passwords must be empty for an open network or
-8-63 bytes for a secured network. The password is sent only by POST to `/save`,
-is never placed in a URL or browser storage, and the existing connection state
-machine prevents double submission.
+The normal scan list remains the default view. The underlined **Advanced View**
+link opens offline SPA views for manual credentials, runtime device properties,
+and restart. Manual SSIDs are submitted exactly as entered, including
+leading/trailing spaces, and are validated as 1-32 bytes. Passwords must be empty
+for an open network or 8-63 bytes for a secured network. The password is sent
+only by POST to `/save`, is never placed in a URL or browser storage, and the
+existing connection state machine prevents double submission. Properties are
+fetched only when their view opens, and Reset uses a POST followed by a deferred
+restart in `process()` without erasing credentials.
 
 The scan progress indicator uses a fixed-width translated bar with linear
 infinite motion. It never scales or changes shape, and it becomes static when
@@ -271,6 +272,17 @@ uint8_t lastDisconnectReason() const;
 
 bool eraseCredentials(bool disconnect = true);
 ```
+
+## Changes in 2.1.2
+
+- Advanced View now separates Manual Configure WiFi, runtime Properties, and
+  Reset into responsive offline SPA views.
+- `GET /properties` reports current ESP32, SoftAP, STA, and MAC information
+  without exposing Wi-Fi passwords or polling in the background.
+- `POST /reset` acknowledges the request before a cooperative, wrap-safe,
+  deferred restart; saved credentials remain intact.
+- Manual credentials still use the existing `/save` validation and connection
+  state machine, preserving exact SSID bytes.
 
 ## Changes in 2.1.1
 

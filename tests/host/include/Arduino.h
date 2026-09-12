@@ -112,7 +112,29 @@ public:
   void println() {}
 };
 
+struct FakeESPState {
+  uint64_t efuseMac = 0x0123456789ABCDEFULL;
+  uint32_t cpuMHz = 240;
+  uint32_t flashSize = 4U * 1024U * 1024U;
+  uint32_t flashSpeed = 80U * 1000U * 1000U;
+  uint32_t freeHeap = 128U * 1024U;
+  uint32_t restartCalls = 0;
+};
+
+extern FakeESPState FakeESP;
+
+class ESPClass {
+public:
+  uint64_t getEfuseMac() const { return FakeESP.efuseMac; }
+  uint32_t getCpuFreqMHz() const { return FakeESP.cpuMHz; }
+  uint32_t getFlashChipSize() const { return FakeESP.flashSize; }
+  uint32_t getFlashChipSpeed() const { return FakeESP.flashSpeed; }
+  uint32_t getFreeHeap() const { return FakeESP.freeHeap; }
+  void restart() { ++FakeESP.restartCalls; }
+};
+
 extern FakeSerialClass Serial;
+extern ESPClass ESP;
 extern uint32_t FakeMillis;
 
 uint32_t millis();

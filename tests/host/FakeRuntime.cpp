@@ -3,6 +3,8 @@
 #include <cassert>
 
 FakeSerialClass Serial;
+FakeESPState FakeESP;
+ESPClass ESP;
 uint32_t FakeMillis = 0;
 FakeDNSServerState FakeDNS;
 FakeWebServerState FakeWebServer;
@@ -21,6 +23,7 @@ void resetFakeRuntime(bool preservePreferences) {
   const auto savedBytes = FakePreferences.bytes;
   const auto savedStrings = FakePreferences.strings;
   FakeMillis = 0;
+  FakeESP = FakeESPState();
   FakeDNS = FakeDNSServerState();
   FakeWebServer = FakeWebServerState();
   FakeWiFi = FakeWiFiState();

@@ -2,8 +2,8 @@
  * @file ESP32WiFiPortal.cpp
  * @author Tran Nguyen Hien (trannguyenhien29085@gmail.com)
  * @brief ESP32 Wi-Fi captive portal library implementation
- * @version 2.1.1
- * @date 2026-09-10
+ * @version 2.1.2
+ * @date 2026-09-12
  * 
  * @copyright Copyright (c) 2026 Tran Nguyen Hien. All rights reserved.
  */
@@ -47,6 +47,22 @@ void appendIPAddress(String& output, const IPAddress& address) {
   }
 }
 
+void appendHex64(String& output, uint64_t value) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (int8_t shift = 60; shift >= 0; shift -= 4) {
+    output += kHex[(value >> shift) & 0x0F];
+  }
+}
+
+void appendMACAddress(String& output, const uint8_t* address) {
+  static const char kHex[] = "0123456789ABCDEF";
+  for (uint8_t i = 0; i < 6; ++i) {
+    if (i > 0) output += ':';
+    output += kHex[address[i] >> 4];
+    output += kHex[address[i] & 0x0F];
+  }
+}
+
 uint32_t hashSSID(const String& ssid) {
   uint32_t hash = 2166136261UL;
   for (size_t i = 0; i < ssid.length(); ++i) {
@@ -72,6 +88,7 @@ constexpr size_t ESP32WiFiPortal::kCredentialPasswordOffset;
 constexpr size_t ESP32WiFiPortal::kCredentialCRCOffset;
 constexpr size_t ESP32WiFiPortal::kCredentialRecordSize;
 constexpr uint32_t ESP32WiFiPortal::kDefaultConnectTimeoutMs;
+constexpr uint32_t ESP32WiFiPortal::kRestartDelayMs;
 
 const char* ESP32WiFiPortal::portalNetworkValidationMessage(
     PortalNetworkValidationResult result) {
@@ -338,6 +355,8 @@ void ESP32WiFiPortal::configureRoutes() {
   _server->on("/scan", HTTP_GET, [this]() { handleScan(); });
   _server->on("/save", HTTP_POST, [this]() { handleSave(); });
   _server->on("/status", HTTP_GET, [this]() { handleStatus(); });
+  _server->on("/properties", HTTP_GET, [this]() { handleProperties(); });
+  _server->on("/reset", HTTP_POST, [this]() { handleReset(); });
 
   // Common captive portal probes used by Android, Apple and Windows.
   _server->on("/generate_204", HTTP_ANY, [this]() { handleCaptiveProbe(); });
@@ -564,6 +583,69 @@ void ESP32WiFiPortal::handleStatus() {
   _server->send(200, "application/json; charset=utf-8", _responseBuffer);
 }
 
+void ESP32WiFiPortal::handleProperties() {
+  if (!_server) return;
+
+  const bool staConnected = WiFi.status() == WL_CONNECTED;
+  uint8_t apMAC[6] = {};
+  uint8_t staMAC[6] = {};
+  WiFi.softAPmacAddress(apMAC);
+  WiFi.macAddress(staMAC);
+
+  _responseBuffer.remove(0);
+  _responseBuffer.reserve(480 + _portalSSID.length());
+  _responseBuffer = F("{\"ssid\":\"");
+  appendJsonEscaped(_responseBuffer, _portalSSID);
+  _responseBuffer += F("\",\"softap\":{\"ip\":\"");
+  appendIPAddress(_responseBuffer, WiFi.softAPIP());
+  _responseBuffer += F("\",\"gateway\":\"");
+  // Arduino-ESP32 exposes the runtime SoftAP IP/subnet, but no matching
+  // SoftAP gateway getter. This is the exact value configured by openPortal().
+  appendIPAddress(_responseBuffer, _portalGateway);
+  _responseBuffer += F("\",\"subnet\":\"");
+  appendIPAddress(_responseBuffer, WiFi.softAPSubnetMask());
+  _responseBuffer += F("\"},\"sta\":{\"connected\":");
+  _responseBuffer += staConnected ? F("true") : F("false");
+  _responseBuffer += F(",\"ip\":\"");
+  if (staConnected) appendIPAddress(_responseBuffer, WiFi.localIP());
+  _responseBuffer += F("\",\"gateway\":\"");
+  if (staConnected) appendIPAddress(_responseBuffer, WiFi.gatewayIP());
+  _responseBuffer += F("\",\"subnet\":\"");
+  if (staConnected) appendIPAddress(_responseBuffer, WiFi.subnetMask());
+  _responseBuffer += F("\"},\"mac\":{\"ap\":\"");
+  appendMACAddress(_responseBuffer, apMAC);
+  _responseBuffer += F("\",\"sta\":\"");
+  appendMACAddress(_responseBuffer, staMAC);
+  _responseBuffer += F("\"},\"chipId\":\"");
+  appendHex64(_responseBuffer, ESP.getEfuseMac());
+  _responseBuffer += F("\",\"cpuMHz\":");
+  _responseBuffer += ESP.getCpuFreqMHz();
+  _responseBuffer += F(",\"flashSize\":");
+  _responseBuffer += ESP.getFlashChipSize();
+  _responseBuffer += F(",\"flashSpeed\":");
+  _responseBuffer += ESP.getFlashChipSpeed();
+  _responseBuffer += F(",\"freeHeap\":");
+  _responseBuffer += ESP.getFreeHeap();
+  _responseBuffer += '}';
+
+  _server->sendHeader("Cache-Control", "no-store");
+  _server->send(200, "application/json; charset=utf-8", _responseBuffer);
+}
+
+void ESP32WiFiPortal::handleReset() {
+  if (!_server) return;
+
+  _server->sendHeader("Cache-Control", "no-store");
+  _server->send(202, "application/json; charset=utf-8",
+                "{\"restarting\":true}");
+
+  // Keep the first timestamp so repeated POSTs cannot postpone the reboot.
+  if (!_restartPending) {
+    _restartRequestedAt = millis();
+    _restartPending = true;
+  }
+}
+
 void ESP32WiFiPortal::handleCaptiveProbe() {
   if (!_server) return;
   _server->sendHeader("Location", _redirectURL, true);
@@ -577,6 +659,13 @@ void ESP32WiFiPortal::handleNotFound() {
 
 void ESP32WiFiPortal::process() {
   processWiFiEvents();
+
+  if (_restartPending &&
+      millis() - _restartRequestedAt >= kRestartDelayMs) {
+    _restartPending = false;
+    ESP.restart();
+    return;
+  }
 
   if (_portalActive) {
     processScan();

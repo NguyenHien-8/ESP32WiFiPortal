@@ -86,6 +86,18 @@ struct ESP32WiFiPortalTestAccess {
     return portal._pendingSSID;
   }
 
+  static bool restartPending(const ESP32WiFiPortal& portal) {
+    return portal._restartPending;
+  }
+
+  static uint32_t restartRequestedAt(const ESP32WiFiPortal& portal) {
+    return portal._restartRequestedAt;
+  }
+
+  static uint32_t restartDelay() {
+    return ESP32WiFiPortal::kRestartDelayMs;
+  }
+
   static uint32_t connectTimeout(const ESP32WiFiPortal& portal) {
     return portal._connectTimeoutMs;
   }

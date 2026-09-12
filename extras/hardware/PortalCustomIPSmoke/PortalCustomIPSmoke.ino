@@ -23,7 +23,7 @@ void setup() {
 
   const size_t initialHeap = ESP.getFreeHeap();
   for (uint16_t cycle = 0; cycle < STRESS_CYCLES; ++cycle) {
-    if (!wifiPortal.startConfigPortalAsync("EWP-v2.1.1-Test", "12345678")) {
+    if (!wifiPortal.startConfigPortalAsync("EWP-v2.1.2-Test", "12345678")) {
       fail(wifiPortal.lastError().c_str());
     }
     if (WiFi.softAPIP() != IPAddress(200, 5, 29, 8)) {
@@ -39,7 +39,7 @@ void setup() {
     fail("Heap drift exceeded 2048 bytes");
   }
 
-  if (!wifiPortal.startConfigPortalAsync("EWP-v2.1.1-Test", "12345678")) {
+  if (!wifiPortal.startConfigPortalAsync("EWP-v2.1.2-Test", "12345678")) {
     fail(wifiPortal.lastError().c_str());
   }
 
@@ -53,7 +53,7 @@ void setup() {
   Serial.print("Largest free block: ");
   Serial.println(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   Serial.println("Connect a client and verify DHCP, DNS wildcard, captive probes,");
-  Serial.println("/, /scan, /save and /status on the final running portal.");
+  Serial.println("/, /scan, /save, /status, /properties and POST /reset.");
 }
 
 void loop() {
