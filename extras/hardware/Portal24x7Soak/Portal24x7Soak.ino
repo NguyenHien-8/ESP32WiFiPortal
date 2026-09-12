@@ -89,11 +89,13 @@ bool credentialRecordValid(Preferences& prefs, const char* key) {
 const char* credentialIntegrity() {
   Preferences prefs;
   if (!prefs.begin("ewp_wifi", true)) return "nvs-error";
+  const bool erasePending = prefs.isKey("cred_erased");
   const bool hasPrimary = prefs.isKey("cred_blob");
   const bool hasBackup = prefs.isKey("cred_backup");
   const bool primaryValid = credentialRecordValid(prefs, "cred_blob");
   const bool backupValid = credentialRecordValid(prefs, "cred_backup");
   prefs.end();
+  if (erasePending) return "erase-pending";
   if (primaryValid) return "valid";
   if (backupValid) return "backup-valid";
   return hasPrimary || hasBackup ? "invalid" : "missing";

@@ -83,6 +83,7 @@ constexpr uint16_t ESP32WiFiPortal::kHttpPort;
 constexpr const char* ESP32WiFiPortal::kPrefsNamespace;
 constexpr const char* ESP32WiFiPortal::kPrefsCredential;
 constexpr const char* ESP32WiFiPortal::kPrefsCredentialBackup;
+constexpr const char* ESP32WiFiPortal::kPrefsCredentialEraseMarker;
 constexpr const char* ESP32WiFiPortal::kPrefsSSID;
 constexpr const char* ESP32WiFiPortal::kPrefsPassword;
 constexpr uint32_t ESP32WiFiPortal::kCredentialMagic;
@@ -141,7 +142,10 @@ ESP32WiFiPortal::~ESP32WiFiPortal() {
   stopConfigPortal();
   cancelAutoReconnect(true);
   if (restoreCoreAutoReconnect) {
-    WiFi.setAutoReconnect(_coreAutoReconnectWasEnabled);
+    if (!WiFi.setAutoReconnect(_coreAutoReconnectWasEnabled) &&
+        _loggingEnabled) {
+      Serial.println(F("[EWP] Failed to restore core auto reconnect policy"));
+    }
     activeWiFiOwner = nullptr;
   }
 }
@@ -382,10 +386,11 @@ bool ESP32WiFiPortal::failPortalStart(const char* message) {
   }
   _dns.stop();
   resetScan(true);
-  if (!WiFi.softAPdisconnect(true)) {
+  bool softAPStopped = WiFi.softAPdisconnect(true);
+  if (!softAPStopped) {
     // Some core/IDF combinations can fail while clearing the AP config. A
     // direct mode transition is a bounded fallback that still preserves STA.
-    WiFi.mode(WIFI_STA);
+    softAPStopped = WiFi.mode(WIFI_STA);
   }
 
   _portalTimeoutMs = 0;
@@ -397,7 +402,11 @@ bool ESP32WiFiPortal::failPortalStart(const char* message) {
   _scanNetworkIdentities.reset();
   _scanNetworkIdentityCapacity = 0;
 
-  setError(message);
+  String failureMessage(message);
+  if (!softAPStopped) {
+    failureMessage += "; failed to disable the SoftAP interface";
+  }
+  setError(failureMessage);
   _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Failed;
   scheduleSavedConnectionRecovery();
   return false;
@@ -970,9 +979,9 @@ void ESP32WiFiPortal::cancelSTAConnection() {
       !_staDisconnected;
   releaseSTAConnection();
   if (disconnectSTA) {
-    WiFi.disconnect(false, false);
+    const bool disconnected = WiFi.disconnect(false, false);
     _staDisconnected = WiFi.status() != WL_CONNECTED;
-    if (!_staDisconnected) {
+    if (!disconnected && !_staDisconnected) {
       setError("Failed to cancel the STA connection attempt");
     }
   }
@@ -1184,7 +1193,10 @@ bool ESP32WiFiPortal::connect(uint32_t timeoutMs) {
     stopConfigPortal();
   }
 
-  ensureWiFiEventHandler();
+  if (!ensureWiFiEventHandler()) {
+    _state = State::Failed;
+    return false;
+  }
   cancelAutoReconnect(true);
   if (timeoutMs == 0) {
     timeoutMs = kDefaultConnectTimeoutMs;
@@ -1316,7 +1328,21 @@ bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password
     return false;
   }
 
-  const bool saved = writeCredentialRecord(prefs, ssid, password);
+  // An interrupted erase marker invalidates every older credential record.
+  // Keep the marker until the replacement primary has survived exact
+  // read-back, so reset during provisioning cannot resurrect erased data.
+  const bool erasePending = prefs.isKey(kPrefsCredentialEraseMarker);
+  if (erasePending && !removeStoredCredentials(prefs)) {
+    prefs.end();
+    setError("Unable to finish the pending credential erase");
+    clearCredentialCache(CredentialCacheStatus::Unavailable);
+    return false;
+  }
+
+  bool saved = writeCredentialRecord(prefs, ssid, password);
+  if (saved && erasePending) {
+    saved = prefs.remove(kPrefsCredentialEraseMarker);
+  }
   if (saved) {
     // Legacy keys are kept until the new record has survived an exact
     // read-back and CRC validation. A reset at any earlier point can safely
@@ -1330,6 +1356,8 @@ bool ESP32WiFiPortal::saveCredentials(const String& ssid, const String& password
     _savedSSID = ssid;
     _savedPassword = password;
     _credentialCacheStatus = CredentialCacheStatus::Valid;
+  } else {
+    setError("Unable to commit the Wi-Fi credential transaction");
   }
   return saved;
 }
@@ -1347,6 +1375,20 @@ bool ESP32WiFiPortal::ensureCredentialCache() {
   // while the object cache is unresolved, not on every reconnect attempt.
   if (!prefs.begin(kPrefsNamespace, false)) {
     clearCredentialCache(CredentialCacheStatus::Unavailable);
+    return false;
+  }
+
+  if (prefs.isKey(kPrefsCredentialEraseMarker)) {
+    // Marker presence is intentionally fail-closed, including a short marker
+    // left by power loss. Old primary, backup, and legacy keys must never be
+    // considered once erase has started.
+    const bool removed = removeStoredCredentials(prefs);
+    const bool markerRemoved =
+        removed && prefs.remove(kPrefsCredentialEraseMarker);
+    prefs.end();
+    clearCredentialCache(removed && markerRemoved
+                             ? CredentialCacheStatus::NotFound
+                             : CredentialCacheStatus::Unavailable);
     return false;
   }
 
@@ -1692,6 +1734,36 @@ bool ESP32WiFiPortal::writeCredentialBytes(
          verifiedPassword == expectedPassword;
 }
 
+bool ESP32WiFiPortal::writeCredentialEraseMarker(Preferences& prefs) {
+  static const uint8_t marker[] = {'E', 'W', 'P', 'X'};
+  uint8_t readBack[sizeof(marker)] = {};
+  if (prefs.putBytes(kPrefsCredentialEraseMarker, marker, sizeof(marker)) !=
+          sizeof(marker) ||
+      prefs.getBytesLength(kPrefsCredentialEraseMarker) != sizeof(marker) ||
+      prefs.getBytes(kPrefsCredentialEraseMarker, readBack,
+                     sizeof(readBack)) != sizeof(readBack)) {
+    return false;
+  }
+  return memcmp(marker, readBack, sizeof(marker)) == 0;
+}
+
+bool ESP32WiFiPortal::removeStoredCredentials(Preferences& prefs) {
+  bool removed = true;
+  if (prefs.isKey(kPrefsCredential)) {
+    removed = prefs.remove(kPrefsCredential) && removed;
+  }
+  if (prefs.isKey(kPrefsCredentialBackup)) {
+    removed = prefs.remove(kPrefsCredentialBackup) && removed;
+  }
+  if (prefs.isKey(kPrefsSSID)) {
+    removed = prefs.remove(kPrefsSSID) && removed;
+  }
+  if (prefs.isKey(kPrefsPassword)) {
+    removed = prefs.remove(kPrefsPassword) && removed;
+  }
+  return removed;
+}
+
 void ESP32WiFiPortal::clearCredentialCache(CredentialCacheStatus status) {
   _savedSSID.remove(0);
   _savedPassword.remove(0);
@@ -1712,32 +1784,44 @@ bool ESP32WiFiPortal::eraseCredentials(bool disconnect) {
     setError("Unable to open NVS namespace");
     return false;
   }
-  bool ok = true;
-  if (prefs.isKey(kPrefsCredential)) ok = prefs.remove(kPrefsCredential) && ok;
-  if (prefs.isKey(kPrefsCredentialBackup)) {
-    ok = prefs.remove(kPrefsCredentialBackup) && ok;
+  // Commit the erase intent before deleting either transactional record. If
+  // power is lost between removes, boot sees the marker and refuses to restore
+  // the surviving backup/legacy value.
+  const bool markerWritten = writeCredentialEraseMarker(prefs);
+  bool ok = false;
+  if (markerWritten) {
+    const bool removed = removeStoredCredentials(prefs);
+    ok = removed && prefs.remove(kPrefsCredentialEraseMarker);
   }
-  if (prefs.isKey(kPrefsSSID)) ok = prefs.remove(kPrefsSSID) && ok;
-  if (prefs.isKey(kPrefsPassword)) ok = prefs.remove(kPrefsPassword) && ok;
   prefs.end();
 
   if (ok) {
     clearCredentialCache(CredentialCacheStatus::NotFound);
   } else {
     clearCredentialCache(CredentialCacheStatus::Unknown);
+    setError(markerWritten
+                 ? "Credential erase is incomplete; the erase marker prevents recovery"
+                 : "Unable to verify the credential erase marker");
   }
 
   if (disconnect) {
+    if (!ensureWiFiEventHandler()) {
+      if (ok) {
+        setError("Credentials erased, but Wi-Fi disconnect requires ownership");
+      }
+      return false;
+    }
     cancelAutoReconnect(true);
     stopConfigPortal();
     const bool wasConnected = WiFi.status() == WL_CONNECTED;
     const bool disconnected = WiFi.disconnect(true, true);
-    if (!disconnected && wasConnected && WiFi.status() == WL_CONNECTED) {
+    const bool connectedAfterDisconnect = WiFi.status() == WL_CONNECTED;
+    if (!disconnected && wasConnected && connectedAfterDisconnect) {
       setError("Credentials erased, but the STA interface did not disconnect");
       _state = State::Failed;
       ok = false;
     } else {
-      _state = State::Idle;
+      _state = connectedAfterDisconnect ? State::Connected : State::Idle;
     }
   }
   return ok;
@@ -1814,9 +1898,13 @@ bool ESP32WiFiPortal::isSTAStaticIPConfigured() const {
 }
 
 void ESP32WiFiPortal::setAutoReconnect(bool enabled) {
-  ensureWiFiEventHandler();
-  WiFi.setAutoReconnect(false);
+  if (!ensureWiFiEventHandler()) return;
+  if (!WiFi.setAutoReconnect(false)) {
+    setError("Unable to disable the Arduino Wi-Fi reconnect policy");
+    return;
+  }
   _autoReconnectEnabled = enabled;
+  _lastError = "";
 
   if (!enabled) {
     const bool hadActiveReconnect =
@@ -1825,9 +1913,7 @@ void ESP32WiFiPortal::setAutoReconnect(bool enabled) {
         _reconnectScheduled || hadActiveReconnect;
     cancelAutoReconnect(true);
     if (wasReconnecting) {
-      _state = !hadActiveReconnect && WiFi.status() == WL_CONNECTED
-                   ? State::Connected
-                   : State::Idle;
+      _state = WiFi.status() == WL_CONNECTED ? State::Connected : State::Idle;
     }
     return;
   }

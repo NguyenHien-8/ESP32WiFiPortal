@@ -185,6 +185,7 @@ private:
   static constexpr const char* kPrefsNamespace = "ewp_wifi";
   static constexpr const char* kPrefsCredential = "cred_blob";
   static constexpr const char* kPrefsCredentialBackup = "cred_backup";
+  static constexpr const char* kPrefsCredentialEraseMarker = "cred_erased";
   static constexpr const char* kPrefsSSID = "ssid";
   static constexpr const char* kPrefsPassword = "pass";
   static constexpr uint32_t kCredentialMagic = 0x43505745UL;  // "EWPC"
@@ -404,6 +405,8 @@ private:
                             const uint8_t* record,
                             const String& expectedSSID,
                             const String& expectedPassword);
+  static bool writeCredentialEraseMarker(Preferences& prefs);
+  static bool removeStoredCredentials(Preferences& prefs);
   void clearCredentialCache(CredentialCacheStatus status);
   static bool isValidRawPSK(const String& password);
   bool validAPPassword(const char* password) const;

@@ -33,7 +33,9 @@ flowchart TD
     D -- Có --> F[Lưu cấu hình Portal IP trong object]
     C --> G[connectSaved hoặc autoConnect]
     F --> G
-    G --> H{cred_blob hợp lệ?}
+    G --> X{Có cred_erased?}
+    X -- Có --> Y[Xóa mọi record credential và trả về không có credential]
+    X -- Không --> H{cred_blob hợp lệ?}
     H -- Có --> J[Áp dụng DHCP hoặc Static STA IP và bắt đầu connection]
     H -- Thiếu hoặc hỏng --> HB{cred_backup hợp lệ?}
     HB -- Có --> HC[Dùng backup cũ và thử phục hồi primary]
@@ -48,6 +50,7 @@ flowchart TD
     J --> K{Kết nối trước timeout?}
     K -- Có --> L[State = Connected]
     K -- Không --> M[WiFi.disconnect, trả false và đặt lịch credential đã lưu]
+    Y --> I
     I -- Có --> N[Mở Config Portal blocking]
     I -- Không --> O[Trả false cho ứng dụng]
     M --> I
@@ -230,16 +233,20 @@ Khi restart Portal, lịch phục hồi tạm thời được hủy trước khi
 
 ```mermaid
 flowchart LR
-    A[eraseCredentials false] --> B[Xóa cred_blob, cred_backup, ssid và pass]
-    B --> C[Không chủ động ngắt Wi-Fi]
-    D[eraseCredentials true] --> F[Xóa cred_blob, cred_backup, ssid và pass]
-    F --> E[Dừng và cleanup Portal nếu đang chạy]
-    E --> G[Ngắt Wi-Fi và xóa cấu hình Wi-Fi của core]
-    G --> H[State = Idle]
+    A[eraseCredentials] --> B[Ghi và xác minh cred_erased]
+    B --> C[Xóa primary backup và các legacy key]
+    C --> D[Xóa cred_erased sau cùng]
+    D --> E{Có yêu cầu disconnect?}
+    E -- Không --> F[Giữ nguyên trạng thái Wi-Fi]
+    E -- Có --> G{Instance này sở hữu global Wi-Fi?}
+    G -- Không --> H[Trả false, không đổi global Wi-Fi]
+    G -- Có --> I[Dừng Portal và yêu cầu ngắt STA]
 ```
 
 `eraseCredentials()` là thao tác xóa duy nhất do API công khai yêu cầu. Connect
-timeout, Portal timeout và `stopConfigPortal()` không xóa credential đã lưu.
+Nếu reset xảy ra sau khi marker được commit, boot tiếp tục xóa thay vì phục hồi
+backup còn sót. Connect timeout, Portal timeout và `stopConfigPortal()` không
+xóa credential đã lưu.
 
 ---
 

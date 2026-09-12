@@ -17,7 +17,7 @@ Validation date: 2026-09-12 (Asia/Saigon)
 
 The ESP32 matrix covers all six examples plus
 `extras/hardware/PortalCustomIPSmoke` and
-`extras/hardware/Portal24x7Soak`. The final soak sketch build uses 846,089 bytes
+`extras/hardware/Portal24x7Soak`. The final soak sketch build uses 847,321 bytes
 (64.6%) of flash and 45,756 bytes (14.0%) of global RAM on the generic ESP32 target.
 
 ## Host coverage
@@ -33,7 +33,9 @@ The ESP32 matrix covers all six examples plus
   selects a complete old/new record and repairs a partial primary from backup.
 - Legacy migration, interruption during blob write, interruption after verified
   write but before legacy cleanup, and retry from the complete legacy pair.
-- Explicit erase of `cred_blob`, `cred_backup`, `ssid`, and `pass`.
+- Power-loss-safe erase marker before deleting `cred_blob`, `cred_backup`,
+  `ssid`, and `pass`; reboot completes a partial marker/delete sequence without
+  restoring a surviving backup.
 - Open network, 8-63-byte passphrase, exact 64-digit hexadecimal raw PSK, and
   invalid 64-byte non-hex/65-byte password boundaries.
 - 10-second, 15-second, and zero-normalized connection timeouts; retry burst,
@@ -47,6 +49,12 @@ The ESP32 matrix covers all six examples plus
 - RAM-only core Wi-Fi storage, hostname-before-mode ordering, checked
   mode/storage/event-policy failures, SoftAP-stop fallback, single-owner
   enforcement for the global `WiFi` object, and restoration of core reconnect.
+- A competing instance cannot change core reconnect/persistence/mode state or
+  disconnect the active owner's STA through `setAutoReconnect()` or
+  `eraseCredentials(true)`. Portal stop retains ownership for STA recovery;
+  object destruction releases it.
+- Failed cancellation/disconnect keeps the reported state aligned with the
+  observed driver connection state.
 - Coalesced disconnect events retain an authentication failure even when the
   latest reported reason is non-terminal.
 - POST-only reset acknowledgement, deferred non-blocking restart, repeated
@@ -77,7 +85,8 @@ scenarios:
    unexpected reset, reconnect storm, monotonic heap loss, or invalid CRC.
 
 The sketch reports `credential_crc=backup-valid` when an interrupted primary
-update still has a recoverable verified backup. It emits
+update still has a recoverable verified backup, and `erase-pending` while the
+erase tombstone is present. It emits
 `SOAK_72H_DURATION_REACHED` when duration alone is met. This is not an automatic
 PASS; the complete scenario log still needs review. No 72-hour hardware run was
 performed as part of the 2026-09-12 source audit.

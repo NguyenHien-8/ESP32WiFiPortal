@@ -321,6 +321,56 @@ int main() {
     assert(FakePreferences.bytes.count("cred_backup") == 0);
   }
 
+  // Power loss after the primary is deleted but before the backup is deleted
+  // leaves the erase marker authoritative. Reboot must finish deletion instead
+  // of restoring the surviving backup.
+  resetFakeRuntime();
+  {
+    FakePreferences.bytes["cred_blob"] = valid;
+    FakePreferences.bytes["cred_backup"] =
+        makeRecord("Backup SSID", "backup-password");
+    seedLegacy("Legacy SSID", "legacy-password");
+    FakePreferences.removeResults = {true, false, true, true};
+    ESP32WiFiPortal portal;
+    portal.setLogging(false);
+    assert(!portal.eraseCredentials(false));
+    assert(FakePreferences.bytes.count("cred_blob") == 0);
+    assert(FakePreferences.bytes.count("cred_backup") == 1);
+    assert(FakePreferences.bytes.count("cred_erased") == 1);
+  }
+  resetFakeRuntime(true);
+  {
+    ESP32WiFiPortal portal;
+    portal.setLogging(false);
+    assert(!portal.hasSavedCredentials());
+    assert(ESP32WiFiPortalTestAccess::credentialStatus(portal) ==
+           CredentialStatus::NotFound);
+    assert(FakePreferences.bytes.empty());
+    assert(FakePreferences.strings.empty());
+  }
+
+  // Even a short marker produced by an interrupted marker write is treated
+  // fail-closed. Existing records are not resurrected after reset.
+  resetFakeRuntime();
+  {
+    FakePreferences.bytes["cred_blob"] = valid;
+    FakePreferences.putBytesLimit = 2;
+    ESP32WiFiPortal portal;
+    portal.setLogging(false);
+    assert(!portal.eraseCredentials(false));
+    assert(FakePreferences.bytes.count("cred_blob") == 1);
+    assert(FakePreferences.bytes["cred_erased"].size() == 2);
+  }
+  resetFakeRuntime(true);
+  {
+    ESP32WiFiPortal portal;
+    portal.setLogging(false);
+    assert(!portal.hasSavedCredentials());
+    assert(ESP32WiFiPortalTestAccess::credentialStatus(portal) ==
+           CredentialStatus::NotFound);
+    assert(FakePreferences.bytes.empty());
+  }
+
   resetFakeRuntime();
   {
     FakePreferences.bytes["cred_blob"] = valid;

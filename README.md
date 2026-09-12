@@ -179,7 +179,10 @@ Wi-Fi record during reconnects.
 Arduino-ESP32 exposes one process-wide `WiFi` object. Use one live
 `ESP32WiFiPortal` manager and call its public runtime methods from the same
 application task. A second active manager is rejected instead of being allowed
-to race event callbacks or reconnect policy. Configure a hostname of at most 31
+to race event callbacks or reconnect policy, including through
+`setAutoReconnect()` or `eraseCredentials(true)`. Stopping only the Portal does
+not release Wi-Fi ownership because the same manager may still service STA
+events/reconnects; destroying the manager releases it. Configure a hostname of at most 31
 bytes with `setHostname()` before the first Wi-Fi operation; it is applied
 before Wi-Fi mode initialization so DHCP receives the intended hostname.
 If a blocking `connectSaved()` attempt returns `false`, its saved credentials
@@ -213,7 +216,10 @@ the blob. The legacy keys are removed only after verified read-back. If power is
 lost during that write, the complete legacy pair remains the recovery source;
 if both primary/backup records are unusable and no complete legacy pair exists,
 the credentials are rejected and never passed to `WiFi.begin()`.
-`eraseCredentials()` removes both records and both legacy keys.
+`eraseCredentials()` first commits a `cred_erased` tombstone, then removes both
+records and both legacy keys, and removes the tombstone last. On reboot, marker
+presence suppresses every older record and completes cleanup, so a reset between
+deleting `cred_blob` and `cred_backup` cannot resurrect erased credentials.
 
 CRC detects accidental corruption and interrupted writes; it is not encryption,
 authentication, or tamper protection. Preferences/NVS access control and device
@@ -326,8 +332,10 @@ bool eraseCredentials(bool disconnect = true);
   state machine, preserving exact SSID bytes and supporting 64-digit raw PSKs.
 - Transactional primary/backup credential updates survive interruption without
   destroying the last verified record.
+- A verified erase tombstone prevents a surviving backup from being restored
+  when power is lost during credential deletion.
 - The Wi-Fi driver uses RAM-only configuration storage, validates mode/hostname
-  setup, and rejects competing portal instances around the global `WiFi` object.
+  setup, and rejects all global-state operations from competing portal instances.
 
 ## Changes in 2.1.1
 

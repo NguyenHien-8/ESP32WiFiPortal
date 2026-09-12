@@ -61,6 +61,13 @@ backup; a reset after it sees the new primary. A valid backup can therefore
 repair a partial primary without inventing a mixed credential pair. Saving the
 same credential is a no-op to reduce NVS wear.
 
+Explicit erase uses a separate `cred_erased` tombstone. It is verified before
+any primary, backup, or legacy key is removed and deleted only after all those
+removes succeed. Any marker presence on boot is fail-closed—even if an
+interrupted marker write left a short value—so cleanup resumes without loading
+a surviving old record. A later successful provisioning transaction removes the
+marker only after the new primary has passed exact read-back and CRC validation.
+
 Migration prefers a valid primary. If no valid primary or backup exists but
 both legacy keys form a valid pair, it writes and reads back the blob before deleting either
 legacy key. Thus a reset during migration leaves either the old complete pair,
@@ -164,7 +171,10 @@ All elapsed-time tests use unsigned `millis()` subtraction and remain safe acros
 timer overflow.
 
 Because Arduino-ESP32 provides a global `WiFi` singleton, only one live portal
-instance may own it. A second instance fails before changing mode or policy.
+instance may own it. A second instance fails before changing mode, persistence,
+reconnect policy, or connection state. `stopConfigPortal()` retains ownership
+because STA events/reconnects still belong to that manager; destruction restores
+the previous core reconnect policy and releases ownership.
 Runtime public methods are designed for one application task; the Wi-Fi event
 task communicates only through atomics. Hostname configuration is accepted only
 before first use and is applied before `WiFi.mode()`/`WiFi.begin()`.
@@ -196,8 +206,8 @@ at most the currently ready state transition.
 - `connectSaved()` stops an active portal before switching to `WIFI_STA`.
 - `eraseCredentials(true)` coordinates successful NVS erasure with portal cleanup
   and Wi-Fi disconnection, so server and Wi-Fi state cannot diverge.
-- `eraseCredentials()` removes `cred_blob`, `cred_backup`, `ssid`, and `pass`
-  explicitly while
+- `eraseCredentials()` commits `cred_erased`, removes `cred_blob`,
+  `cred_backup`, `ssid`, and `pass`, then removes the marker explicitly while
   leaving unrelated namespace values untouched.
 
 ## Heap behavior on repeated paths

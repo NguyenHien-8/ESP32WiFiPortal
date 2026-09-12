@@ -33,7 +33,9 @@ flowchart TD
     D -- Yes --> F[Store Portal IP configuration in the object]
     C --> G[connectSaved or autoConnect]
     F --> G
-    G --> H{Valid cred_blob?}
+    G --> X{cred_erased present?}
+    X -- Yes --> Y[Delete all credential records and return no credentials]
+    X -- No --> H{Valid cred_blob?}
     H -- Yes --> J[Apply DHCP or Static STA IP and start connection]
     H -- Missing or corrupt --> HB{Valid cred_backup?}
     HB -- Yes --> HC[Use old backup and repair primary opportunistically]
@@ -48,6 +50,7 @@ flowchart TD
     J --> K{Connected before timeout?}
     K -- Yes --> L[State = Connected]
     K -- No --> M[WiFi.disconnect, return false, and schedule saved credentials]
+    Y --> I
     I -- Yes --> N[Open blocking Config Portal]
     I -- No --> O[Return false to application]
     M --> I
@@ -239,17 +242,20 @@ call `WiFi.begin()` concurrently.
 
 ```mermaid
 flowchart LR
-    A[eraseCredentials false] --> B[Delete cred_blob, cred_backup, ssid, and pass]
-    B --> C[Do not actively disconnect Wi-Fi]
-    D[eraseCredentials true] --> F[Delete cred_blob, cred_backup, ssid, and pass]
-    F --> E[Stop and clean up Portal if active]
-    E --> G[Disconnect Wi-Fi and erase core Wi-Fi configuration]
-    G --> H[State = Idle]
+    A[eraseCredentials] --> B[Write and verify cred_erased]
+    B --> C[Delete primary backup and legacy keys]
+    C --> D[Delete cred_erased last]
+    D --> E{Disconnect requested?}
+    E -- No --> F[Keep Wi-Fi state unchanged]
+    E -- Yes --> G{This instance owns global Wi-Fi?}
+    G -- No --> H[Return false without changing global Wi-Fi]
+    G -- Yes --> I[Stop Portal and request STA disconnect]
 ```
 
 `eraseCredentials()` is the only deletion operation explicitly requested by
-the public API. Connect timeout, Portal timeout, and `stopConfigPortal()` do not
-delete saved credentials.
+the public API. If reset occurs after the marker commit, boot completes deletion
+instead of restoring a surviving backup. Connect timeout, Portal timeout, and
+`stopConfigPortal()` do not delete saved credentials.
 
 ---
 

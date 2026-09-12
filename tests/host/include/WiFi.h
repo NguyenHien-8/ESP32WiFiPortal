@@ -67,6 +67,7 @@ struct FakeWiFiState {
   uint32_t scanDeleteCalls = 0;
   uint32_t scanStopCalls = 0;
   uint32_t persistentCalls = 0;
+  uint32_t autoReconnectCalls = 0;
   uint32_t modeCalls = 0;
   uint32_t storageCalls = 0;
   uint32_t callSequence = 0;
@@ -103,6 +104,7 @@ class WiFiClass {
 public:
   bool getAutoReconnect() const { return FakeWiFi.autoReconnect; }
   bool setAutoReconnect(bool enabled) {
+    ++FakeWiFi.autoReconnectCalls;
     if (!FakeWiFi.autoReconnectResult) return false;
     FakeWiFi.autoReconnect = enabled;
     return true;

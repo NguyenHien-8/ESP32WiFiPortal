@@ -120,9 +120,98 @@ int main() {
       assert(std::string(second.lastError().c_str()) ==
              "Wi-Fi is already managed by another ESP32WiFiPortal instance");
       first.stopConfigPortal();
+      // Stopping the Portal does not release the process-wide event/reconnect
+      // owner while the manager remains alive.
+      assert(!second.startConfigPortalAsync("Second", "12345678"));
     }
     assert(second.startConfigPortalAsync("Second", "12345678"));
     second.stopConfigPortal();
+  }
+
+  resetFakeRuntime();
+  {
+    ESP32WiFiPortal second;
+    second.setLogging(false);
+    {
+      ESP32WiFiPortal first;
+      first.setLogging(false);
+      assert(first.startConfigPortalAsync("Owner", "12345678"));
+
+      const uint32_t policyCalls = FakeWiFi.autoReconnectCalls;
+      const uint32_t persistentCalls = FakeWiFi.persistentCalls;
+      const uint32_t modeCalls = FakeWiFi.modeCalls;
+      const bool policy = FakeWiFi.autoReconnect;
+      second.setAutoReconnect(false);
+
+      assert(second.autoReconnectEnabled());
+      assert(std::string(second.lastError().c_str()) ==
+             "Wi-Fi is already managed by another ESP32WiFiPortal instance");
+      assert(FakeWiFi.autoReconnectCalls == policyCalls);
+      assert(FakeWiFi.persistentCalls == persistentCalls);
+      assert(FakeWiFi.modeCalls == modeCalls);
+      assert(FakeWiFi.autoReconnect == policy);
+      first.stopConfigPortal();
+    }
+
+    // The destructor releases ownership and the waiting manager can then
+    // acquire it normally.
+    second.setAutoReconnect(false);
+    assert(!second.autoReconnectEnabled());
+    assert(std::string(second.lastError().c_str()).empty());
+  }
+
+  resetFakeRuntime();
+  {
+    ESP32WiFiPortal second;
+    second.setLogging(false);
+    {
+      ESP32WiFiPortal first;
+      first.setLogging(false);
+      assert(ESP32WiFiPortalTestAccess::saveCredentials(
+          first, String("Stored Router"), String("stored-password")));
+      assert(first.startConfigPortalAsync("Owner-Erase", "12345678"));
+      FakeWiFi.status = WL_CONNECTED;
+
+      const uint32_t disconnectCalls = FakeWiFi.disconnectCalls;
+      const uint32_t policyCalls = FakeWiFi.autoReconnectCalls;
+      const uint32_t persistentCalls = FakeWiFi.persistentCalls;
+      const uint32_t modeCalls = FakeWiFi.modeCalls;
+      const uint32_t softAPDisconnectCalls = FakeWiFi.softAPDisconnectCalls;
+      assert(!second.eraseCredentials(true));
+
+      assert(FakePreferences.bytes.empty());
+      assert(FakeWiFi.disconnectCalls == disconnectCalls);
+      assert(FakeWiFi.autoReconnectCalls == policyCalls);
+      assert(FakeWiFi.persistentCalls == persistentCalls);
+      assert(FakeWiFi.modeCalls == modeCalls);
+      assert(FakeWiFi.softAPDisconnectCalls == softAPDisconnectCalls);
+      assert(FakeWiFi.status == WL_CONNECTED);
+      assert(std::string(second.lastError().c_str()) ==
+             "Credentials erased, but Wi-Fi disconnect requires ownership");
+      first.stopConfigPortal();
+    }
+  }
+
+  resetFakeRuntime();
+  {
+    ESP32WiFiPortal portal;
+    portal.setLogging(false);
+    assert(ESP32WiFiPortalTestAccess::saveCredentials(
+        portal, String("Reconnect Router"), String("reconnect-password")));
+    portal.setAutoReconnect(true);
+    FakeMillis = 1000;
+    portal.process();
+    FakeMillis = 1020;
+    portal.process();
+    assert(ESP32WiFiPortalTestAccess::reconnectAttemptActive(portal));
+
+    FakeWiFi.status = WL_CONNECTED;
+    FakeWiFi.disconnectResult = false;
+    portal.setAutoReconnect(false);
+    assert(!portal.autoReconnectEnabled());
+    assert(portal.state() == ESP32WiFiPortal::State::Connected);
+    assert(std::string(portal.lastError().c_str()) ==
+           "Failed to cancel the STA connection attempt");
   }
 
   resetFakeRuntime();
