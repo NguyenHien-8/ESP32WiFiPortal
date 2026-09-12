@@ -9,10 +9,10 @@
 [![ESP32 C6](https://img.shields.io/badge/ESP-32C6-000000.svg?longCache=true&style=flat&colorA=CC101F)](https://www.espressif.com/en/products/socs/esp32-c6)
 
 <p align="center">
-  <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="23%">
-  <img src="docs/image/TiNiHi2.jpg" alt="ESP32WiFiPortal interface 2" width="23%">
-  <img src="docs/image/TiNiHi3.jpg" alt="ESP32WiFiPortal interface 3" width="23%">
-  <img src="docs/image/TiNiHi4.jpg" alt="ESP32WiFiPortal interface 4" width="23%">
+  <img src="docs/image/TiNiHi1.jpg" alt="ESP32WiFiPortal interface 1" width="22%">
+  <img src="docs/image/TiNiHi2.jpg" alt="ESP32WiFiPortal interface 2" width="22%">
+  <img src="docs/image/TiNiHi3.jpg" alt="ESP32WiFiPortal interface 3" width="22%">
+  <img src="docs/image/TiNiHi4.jpg" alt="ESP32WiFiPortal interface 4" width="22%">
 </p>
 
 ## How it works
