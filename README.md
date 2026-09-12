@@ -17,12 +17,12 @@
 
 ## How it works
 
-Upon startup, the ESP enters Station mode and attempts to connect to a previously saved access point.
-If this fails (or if no network was previously saved), the ESP switches to Access Point mode and initializes DNS and Web servers (default IP address: 192.168.4.1).
-Use any Wi-Fi-enabled device with a web browser (computer, smartphone, or tablet) to connect to the newly created access point.
-Due to the Captive Portal and DNS server, a "Join Network" pop-up will appear, or any domain you attempt to visit will be redirected to the configuration portal.
-Select one of the scanned access points, enter the password, and click save.
-The ESP will attempt to connect. If successful, it returns control to your application; otherwise, it remains on the Wi-Fi Portal interface.
+- Upon startup, the ESP enters Station mode and attempts to connect to a previously saved access point.
+- If this fails (or if no network was previously saved), the ESP switches to Access Point mode and initializes DNS and Web servers (default IP address: 192.168.4.1).
+- Use any Wi-Fi-enabled device with a web browser (computer, smartphone, or tablet) to connect to the newly created access point.
+- Due to the Captive Portal and DNS server, a "Join Network" pop-up will appear, or any domain you attempt to visit will be redirected to the configuration portal.
+- Select one of the scanned access points, enter the password, and click save.
+- The ESP will attempt to connect. If successful, it returns control to your application; otherwise, it remains on the Wi-Fi Portal interface.
 
 ## Features
 
