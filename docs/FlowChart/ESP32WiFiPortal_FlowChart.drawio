@@ -1,0 +1,349 @@
+<mxfile host="Electron" agent="ChatGPT">
+  <diagram id="wifi-reliability-v212" name="WiFi Reliability 24-7">
+    <mxGraphModel dx="1212" dy="776" grid="1" gridSize="2" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1680" pageHeight="2400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="start" parent="1" style="ellipse;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=17;fontStyle=1;strokeWidth=2;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#1f2937;" value="BẮT ĐẦU" vertex="1">
+          <mxGeometry height="95" width="165" x="1610.5" y="41" as="geometry" />
+        </mxCell>
+        <mxCell id="owner" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#1f2937;" value="Thiết lập một đầu mối quản lý Wi‑Fi&lt;br&gt;• Tránh hai cơ chế reconnect chạy song song&lt;br&gt;• Sử dụng lưu trữ Wi‑Fi của driver ở RAM để giảm ghi NVS" vertex="1">
+          <mxGeometry height="105" width="460" x="1463" y="176" as="geometry" />
+        </mxCell>
+        <mxCell id="loadcred" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#e1f5fe;strokeColor=#0288d1;fontColor=#1f2937;" value="Đọc cấu hình Wi‑Fi đã lưu&lt;br&gt;Kiểm tra tính toàn vẹn trước khi sử dụng" vertex="1">
+          <mxGeometry height="85" width="440" x="1473" y="321" as="geometry" />
+        </mxCell>
+        <mxCell id="credok" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Credential hợp lệ&lt;br&gt;và khả dụng?" vertex="1">
+          <mxGeometry height="130" width="330" x="1528" y="451" as="geometry" />
+        </mxCell>
+        <mxCell id="savedattempt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#1f2937;" value="Chuẩn bị STA → áp dụng DHCP / Static IP&lt;br&gt;Chờ ổn định ngắn → bắt đầu kết nối&lt;br&gt;Áp dụng timeout hữu hạn cho lần thử" vertex="1">
+          <mxGeometry height="115" width="470" x="1458" y="636" as="geometry" />
+        </mxCell>
+        <mxCell id="savedok" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Kết nối thành công?" vertex="1">
+          <mxGeometry height="125" width="300" x="1543" y="801" as="geometry" />
+        </mxCell>
+        <mxCell id="portalopen" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#3f3f46;" value="Mở Captive Portal ở chế độ AP + STA&lt;br&gt;Giữ credential tốt gần nhất trong bộ nhớ&lt;br&gt;để có thể phục hồi nếu cấu hình mới thất bại" vertex="1">
+          <mxGeometry height="125" width="293" x="1094" y="709" as="geometry" />
+        </mxCell>
+        <mxCell id="portalinput" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#3f3f46;" value="Người dùng chọn Wi‑Fi / nhập credential mới&lt;br&gt;Kiểm tra định dạng trước khi thử kết nối" vertex="1">
+          <mxGeometry height="105" width="285" x="1098" y="892" as="geometry" />
+        </mxCell>
+        <mxCell id="candidate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#ffe6cc;strokeColor=#d79b00;fontColor=#3f3f46;" value="Thử credential mới mà CHƯA ghi đè&lt;br&gt;credential đang hoạt động / đã lưu" vertex="1">
+          <mxGeometry height="95" width="285" x="1098" y="1042" as="geometry" />
+        </mxCell>
+        <mxCell id="candidateok" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Kết nối mới&lt;br&gt;thành công?" vertex="1">
+          <mxGeometry height="110" width="223" x="1129" y="1187" as="geometry" />
+        </mxCell>
+        <mxCell id="candidatefail" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#1f2937;" value="Sai xác thực rõ ràng → báo lỗi&lt;br&gt;Timeout / lỗi tạm thời → retry theo chính sách&lt;br&gt;Portal vẫn sẵn sàng để sửa cấu hình" vertex="1">
+          <mxGeometry height="115" width="328.5" x="720" y="1184.5" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-2" edge="1" parent="1" source="commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;fontFamily=Arial;fontSize=13;fontColor=default;strokeWidth=2;strokeColor=#4B5563;curved=0;" target="WSWZFrNVd8Za-oiQqygH-1" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="commit" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#1f2937;fontStyle=1;" value="Chỉ sau khi kết nối thành công:&lt;br&gt;Ghi bản ghi credential có CRC + backup + read‑back&lt;br&gt;Xác minh commit rồi mới dọn bản sao cũ" vertex="1">
+          <mxGeometry height="132" width="404" x="1038.5" y="1408" as="geometry" />
+        </mxCell>
+        <mxCell id="connected" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#1f2937;fontStyle=1;" value="WI‑FI ĐÃ KẾT NỐI ỔN ĐỊNH&lt;br&gt;Reset bộ đếm retry • Xóa lỗi tạm thời • Tiếp tục truyền dữ liệu ứng dụng" vertex="1">
+          <mxGeometry height="105" width="328.5" x="1528.75" y="1042" as="geometry" />
+        </mxCell>
+        <mxCell id="monitor" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#e1f5fe;strokeColor=#0288d1;fontColor=#1f2937;" value="Theo dõi sự kiện Wi‑Fi liên tục&lt;br&gt;Callback chỉ ghi cờ trạng thái; xử lý chính diễn ra cooperative trong vòng lặp" vertex="1">
+          <mxGeometry height="100" width="328.5" x="1528.75" y="1192" as="geometry" />
+        </mxCell>
+        <mxCell id="lost" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Có sự kiện mất kết nối&lt;br&gt;hay không?" vertex="1">
+          <mxGeometry height="125" width="238" x="1574" y="1342" as="geometry" />
+        </mxCell>
+        <mxCell id="schedule" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#1f2937;" value="Lập lịch trình kết nối lại&lt;br&gt;Không chặn vòng lặp; vẫn cho ứng dụng tiếp tục chạy" vertex="1">
+          <mxGeometry height="83" width="300" x="1870" y="1363" as="geometry" />
+        </mxCell>
+        <mxCell id="credrecheck" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#e1f5fe;strokeColor=#0288d1;fontColor=#1f2937;" value="Nạp credential đã được xác minh&amp;lt;br&amp;gt;từ cache / NVS trước khi reconnect" vertex="1">
+          <mxGeometry height="74" width="300" x="1870" y="1475" as="geometry" />
+        </mxCell>
+        <mxCell id="reattempt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#1f2937;" value="Kết nối lại với timeout hữu hạn&lt;br&gt;Mỗi lần thử đều chuẩn hóa trạng thái STA trước khi bắt đầu" vertex="1">
+          <mxGeometry height="105" width="300" x="1870" y="1820" as="geometry" />
+        </mxCell>
+        <mxCell id="reok" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Kết nối lại&lt;br&gt;thành công?" vertex="1">
+          <mxGeometry height="110" width="200" x="1920" y="1964" as="geometry" />
+        </mxCell>
+        <mxCell id="more" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Còn lượt retry&amp;lt;br&amp;gt;&lt;br&gt;trong burst?" vertex="1">
+          <mxGeometry height="110" width="200" x="1920" y="2130" as="geometry" />
+        </mxCell>
+        <mxCell id="backoff" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#3f3f46;" value="Tăng thời gian chờ giữa các lần thử&lt;br&gt;theo cấp số nhân và giới hạn" vertex="1">
+          <mxGeometry height="110" width="260" x="1690" y="2250" as="geometry" />
+        </mxCell>
+        <mxCell id="cooldown" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#ffe6cc;strokeColor=#d79b00;fontColor=#3f3f46;" value="Hết burst → cooldown ở mức tối đa&lt;br&gt;Reset burst rồi tiếp tục tự phục hồi&lt;br&gt;Không bỏ cuộc vĩnh viễn &lt;br&gt;vì lỗi mạng tạm thời" vertex="1">
+          <mxGeometry height="110" width="300" x="2031" y="2250" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="start" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="owner" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="owner" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="loadcred" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="loadcred" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="credok" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="credok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="savedattempt" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="credok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="portalopen" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.268" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1240.53" y="516" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="savedattempt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="savedok" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="savedok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="connected" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.3333" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1692" y="991" />
+              <mxPoint x="1692" y="991" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" target="portalopen" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.6778" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2051" y="771.03" />
+              <mxPoint x="1387" y="771.03" />
+            </Array>
+            <mxPoint x="1428" y="698.5999999999999" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="portalopen" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="portalinput" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="portalinput" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="candidate" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="candidate" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="candidateok" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="candidateok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="commit" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.5172" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1240.52" y="1392" />
+              <mxPoint x="1240" y="1392" />
+            </Array>
+            <mxPoint x="1240.25" y="1290" as="sourcePoint" />
+            <mxPoint x="1239.75" y="1459" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="candidateok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="candidatefail" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.1364" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="candidatefail" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0.5;exitY=0;exitDx=0;exitDy=0;" target="portalinput" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;SỬA / THỬ LẠI&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.8291" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="884.28" y="944.45" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="connected" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.8586" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1462" y="1681.5" />
+              <mxPoint x="1462" y="1094.5" />
+            </Array>
+            <mxPoint x="1383.04" y="1354.5" as="sourcePoint" />
+            <mxPoint x="1453" y="1019" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="connected" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="monitor" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="monitor" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="lost" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" edge="1" parent="1" source="lost" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="monitor" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.1828" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1502" y="1404.52" />
+              <mxPoint x="1502" y="1242" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e19" edge="1" parent="1" source="lost" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="schedule" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.1818" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1770" y="1404.5" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e20" edge="1" parent="1" source="schedule" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="credrecheck" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" edge="1" parent="1" source="reattempt" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="reok" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e23" edge="1" parent="1" source="reok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="connected" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ-reset retry&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.8431" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2392" y="2019" />
+              <mxPoint x="2392" y="1094.57" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e24" edge="1" parent="1" source="reok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="more" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.1998" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2020" y="2088" />
+              <mxPoint x="2020" y="2088" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e25" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="backoff" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;CÓ&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.3091" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1885" y="2185" />
+            </Array>
+            <mxPoint x="1919.999999999999" y="2184.9999999999995" as="sourcePoint" />
+            <mxPoint x="1720" y="2205" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e26" edge="1" parent="1" source="more" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cooldown" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.4921" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2181" y="2185" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e27" edge="1" parent="1" source="backoff" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="reattempt" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;THỬ LẠI&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.2725" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="1666" y="2305" />
+              <mxPoint x="1666" y="1869" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e28" edge="1" parent="1" source="cooldown" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="schedule" value="&lt;span style=&quot;font-size: 13px;&quot;&gt;TIẾP TỤC TỰ PHỤC HỒI&lt;/span&gt;">
+          <mxGeometry relative="1" x="-0.5746" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2406" y="2305" />
+              <mxPoint x="2406" y="1402" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-1" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Commit + read-back&amp;lt;br&amp;gt;&lt;br&gt;thành công?" vertex="1">
+          <mxGeometry height="115" width="235" x="1123" y="1624" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#1f2937;" value="Không chấp nhận credential mới&amp;lt;br&amp;gt;Ngắt candidate • giữ bản ghi tốt trước đó&amp;lt;br&amp;gt;&lt;br&gt;Quay lại Captive Portal" vertex="1">
+          <mxGeometry height="115" width="310" x="728" y="1624" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-5" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="WSWZFrNVd8Za-oiQqygH-3" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1168" y="1728" as="sourcePoint" />
+            <mxPoint x="1100" y="1724" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-6" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=0;entryY=0.25;entryDx=0;entryDy=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="portalinput" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;SỬA / THỬ LẠI&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.4937" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="702.06" y="1681.47" />
+              <mxPoint x="702.06" y="918.29" />
+            </Array>
+            <mxPoint x="866" y="2152" as="sourcePoint" />
+            <mxPoint x="1073" y="1352" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-7" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Lỗi xác thực rõ ràng&amp;lt;br&amp;gt;hoặc &lt;br&gt;đã hết lượt retry?" vertex="1">
+          <mxGeometry height="156.5" width="258" x="1922" y="785.25" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-8" edge="1" parent="1" source="savedok" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="WSWZFrNVd8Za-oiQqygH-7" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.1139" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1854" y="809" as="sourcePoint" />
+            <mxPoint x="1971" y="809" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#3f3f46;" value="Chờ Backoff tăng dần có giới hạn&amp;lt;br&amp;gt;rồi thử kết nối lại" vertex="1">
+          <mxGeometry height="90" width="270" x="1916" y="983" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-10" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;" target="WSWZFrNVd8Za-oiQqygH-9" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.2781" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="2050" y="941.75" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-11" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="savedattempt" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;THỬ LẠI&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.5481" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2238" y="1028" />
+              <mxPoint x="2238" y="693.5" />
+            </Array>
+            <mxPoint x="2530" y="1269" as="sourcePoint" />
+            <mxPoint x="2198" y="929" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-13" parent="1" style="rhombus;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=15;strokeWidth=2;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#1f2937;" value="Trạng thái credential?" vertex="1">
+          <mxGeometry height="130" width="194" x="1923" y="1583" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-14" edge="1" parent="1" source="credrecheck" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="WSWZFrNVd8Za-oiQqygH-13" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+            <mxPoint x="1904" y="1587" as="sourcePoint" />
+            <mxPoint x="1904" y="1631" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-15" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#3f3f46;" value="NVS tạm thời không khả dụng&amp;lt;br&amp;gt;&lt;br&gt;Chờ cooldown tối đa rồi kiểm tra lại" vertex="1">
+          <mxGeometry height="79.5" width="264" x="2092" y="1705" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-16" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="WSWZFrNVd8Za-oiQqygH-15" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;TẠM THỜI KHÔNG KHẢ DỤNG&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.2289" y="12" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2224" y="1648" />
+            </Array>
+            <mxPoint x="2122" y="1644" as="sourcePoint" />
+            <mxPoint x="2229" y="1701" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-17" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-15" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="credrecheck" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KIỂM TRA LẠI&lt;/font&gt;">
+          <mxGeometry relative="1" x="0.5264" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="2378" y="1744.83" />
+              <mxPoint x="2378" y="1512" />
+            </Array>
+            <mxPoint x="2618" y="1650" as="sourcePoint" />
+            <mxPoint x="2174" y="1472.9999999999998" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-18" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fontFamily=Arial;fontSize=16;strokeWidth=2;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#1f2937;" value="FAILED – dừng Auto Reconnect&amp;lt;br&amp;gt;&lt;br&gt;Không sử dụng credential hỏng / không &lt;br&gt;tồn tại&amp;lt;br&amp;gt;Chờ provisioning hợp lệ&lt;br&gt;&amp;nbsp;" vertex="1">
+          <mxGeometry height="83" width="312" x="1531" y="1606.5" as="geometry" />
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-19" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="WSWZFrNVd8Za-oiQqygH-18" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;KHÔNG&amp;nbsp;&lt;/font&gt;">
+          <mxGeometry relative="1" x="-0.0689" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="1908" y="1695" as="sourcePoint" />
+            <mxPoint x="1876" y="1748" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="WSWZFrNVd8Za-oiQqygH-20" edge="1" parent="1" source="WSWZFrNVd8Za-oiQqygH-13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#4b5563;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="reattempt" value="&lt;font style=&quot;font-size: 13px;&quot;&gt;HỢP LỆ&lt;/font&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1884" y="1708" as="sourcePoint" />
+            <mxPoint x="1884" y="1768" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
